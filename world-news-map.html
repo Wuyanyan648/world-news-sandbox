@@ -6,7 +6,7 @@
 <title>寰宇战情 · 世界新闻沙盘</title>
 <style>
   :root{
-    --bg:#05080f; --panel:#0d1422; --panel2:#101a2c; --line:#26364f;
+    --bg:#071020; --panel:#0d1422; --panel2:#101a2c; --line:#26364f;
     --gold:#c9a227; --gold2:#e6c86a; --ink:#d8e0ee; --muted:#8fa0b8;
   }
   *{box-sizing:border-box;margin:0;padding:0}
@@ -409,17 +409,27 @@ function resize(){
   fctx.setTransform(dpr,0,0,dpr,0,0);
   renderVignette();
   if (!inited){ inited = true; fitWorld(); }
+  else if (atFit){ fitWorld(); }            // 处于全局视角时，窗口变化后重新铺满
+  else {
+    cam.z = Math.max(cam.z, minZoom());     // 防止窗口变大后地图缩成一小块
+    clampCam();
+  }
 }
 let inited = false;
-const minZoom = () => Math.min(vw/MAPW, vh/MAPH);
+let atFit = false;
+// 最小缩放取“铺满窗口”，避免出现大片黑边与地图矩形硬边
+const minZoom = () => Math.max(vw/MAPW, vh/MAPH);
 function clampCam(){
+  const min = minZoom();
+  if (min > 0 && cam.z < min) cam.z = min;
   const w = MAPW*cam.z, h = MAPH*cam.z;
   cam.ox = w<=vw ? (vw-w)/2 : clamp(cam.ox, vw-w, 0);
   cam.oy = h<=vh ? (vh-h)/2 : clamp(cam.oy, vh-h, 0);
 }
 function fitWorld(){
-  const s = Math.min(vw/MAPW, vh/MAPH);
+  const s = Math.max(vw/MAPW, vh/MAPH);
   cam.z = s; cam.ox = (vw-MAPW*s)/2; cam.oy = (vh-MAPH*s)/2;
+  atFit = true;
   cancelAnim();
 }
 const m2s = (x,y) => [x*cam.z+cam.ox, y*cam.z+cam.oy];
@@ -457,6 +467,7 @@ function flyToEvent(ev){
   const cx=(x0+x1)/2, cy=(y0+y1)/2, pad=140;
   let z = Math.min((vw-pad*2)/Math.max(x1-x0,1), (vh-pad*2)/Math.max(y1-y0,1), 7);
   z = Math.max(z, minZoom());
+  atFit = false;
   anim = {t0:performance.now(), dur:900,
     from:{ox:cam.ox,oy:cam.oy,z:cam.z},
     to:{ox:vw/2-cx*z, oy:vh/2-cy*z, z}};
@@ -685,6 +696,7 @@ canvas.addEventListener('wheel', e=>{
   const [mx,my] = [e.clientX, e.clientY];
   const [gx,gy] = s2m(mx,my);
   cam.z = clamp(cam.z*factor, minZoom(), 14);
+  atFit = cam.z <= minZoom() * 1.001;
   cam.ox = mx - gx*cam.z; cam.oy = my - gy*cam.z;
   clampCam();
 }, {passive:false});
@@ -693,13 +705,14 @@ canvas.addEventListener('dblclick', e=>{
   const factor = 1.6;
   const [gx,gy] = s2m(e.clientX, e.clientY);
   cam.z = clamp(cam.z*factor, minZoom(), 14);
+  atFit = false;
   cam.ox = e.clientX - gx*cam.z; cam.oy = e.clientY - gy*cam.z;
   clampCam();
 });
 window.addEventListener('keydown', e=>{
   const step = 60;
-  if (e.key==='+'||e.key==='='){ cam.z = clamp(cam.z*1.25, minZoom(), 14); clampCam(); }
-  else if (e.key==='-'){ cam.z = clamp(cam.z/1.25, minZoom(), 14); clampCam(); }
+  if (e.key==='+'||e.key==='='){ cam.z = clamp(cam.z*1.25, minZoom(), 14); atFit=false; clampCam(); }
+  else if (e.key==='-'){ cam.z = clamp(cam.z/1.25, minZoom(), 14); atFit = cam.z <= minZoom()*1.001; clampCam(); }
   else if (e.key==='ArrowLeft'){ cam.ox += step; clampCam(); }
   else if (e.key==='ArrowRight'){ cam.ox -= step; clampCam(); }
   else if (e.key==='ArrowUp'){ cam.oy += step; clampCam(); }
