@@ -4,10 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <title>寰宇战情 · 世界新闻沙盘</title>
+<link rel="icon" type="image/svg+xml" href="desktop/icon.svg">
 <style>
   :root{
     --bg:#071020; --panel:#0d1422; --panel2:#101a2c; --line:#26364f;
     --gold:#c9a227; --gold2:#e6c86a; --ink:#d8e0ee; --muted:#8fa0b8;
+    --green:#2f9e7d; --red:#b91c1c;
   }
   *{box-sizing:border-box;margin:0;padding:0}
   html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--ink);
@@ -1084,9 +1086,13 @@ function fmtDate(d){ return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d
 /* 已知有数据的周区间（由桌面壳返回），日期落在任一区间即视为有数据 */
 let knownWeeks = [];
 function weekFor(dateStr){
+  // 历史周文件可能是 7 天滚动窗口，区间会重叠；优先选择覆盖最新的一周，保证结果稳定
+  let best = null;
   for (const w of knownWeeks){
-    if (dateStr >= w.start && dateStr <= w.end) return w;
+    if (dateStr < w.start || dateStr > w.end) continue;
+    if (!best || w.end > best.end || (w.end === best.end && w.start > best.start)) best = w;
   }
+  if (best) return best;
   const d = new Date(dateStr + 'T00:00:00');
   d.setDate(d.getDate() - 7);
   return {start: fmtDate(d), end: dateStr};
@@ -1095,12 +1101,22 @@ function refreshWeeks(){
   if (!bridge) return;
   bridge.postMessage(JSON.stringify({action:'list'}));
 }
+let loadSeq = 0;
+let desiredDate = fmtDate(bjNow());
 function loadWeek(dateStr, opts){
   const probe = !!(opts && opts.probe);
   const end = new Date(dateStr + 'T00:00:00');
   if (isNaN(end.getTime())){ if(!probe) setBanner('日期无效。', 'error'); return; }
   const wk = weekFor(dateStr);
   const s = wk.start, e = wk.end;
+  // 后台轮询只服务“用户当前想看的周”：用户切走后不再注入脚本，避免抢走视图或覆盖全局数据
+  if (probe){
+    const dw = weekFor(desiredDate);
+    if (dw.start !== s || dw.end !== e) return;
+  } else {
+    desiredDate = dateStr;
+  }
+  const seq = ++loadSeq;
   if (!probe) setBanner(`正在加载 ${s} ~ ${e} 的新闻数据…`, 'working');
 
   const sc = document.createElement('script');
@@ -1112,10 +1128,15 @@ function loadWeek(dateStr, opts){
     // 校验加载到的确实是本周数据，避免旧数据被误当成新周
     const ld = (window.NEWS_DATA && window.NEWS_DATA.latestDate) || '';
     if (!list.length || ld < s || ld > e){ missing(); return; }
-    stopProbe();
-    generating = false;
-    window.__pendingWeek = null;
-    window.__pendingCurrent = false;
+    // 仅当加载的是待生成周（或没有待生成任务）时才解除生成状态，
+    // 否则会把仍在后台运行的生成任务误判为结束，导致并发触发 workflow。
+    const pendingWeek = window.__pendingWeek ? weekFor(window.__pendingWeek) : null;
+    if (!pendingWeek || (pendingWeek.start === s && pendingWeek.end === e)){
+      stopProbe();
+      generating = false;
+      window.__pendingWeek = null;
+      window.__pendingCurrent = false;
+    }
     EVENTS.length = 0;
     EVENTS.push(...list);
     viewingDate = e;
@@ -1136,30 +1157,35 @@ function loadWeek(dateStr, opts){
 
   const missing = () => {
     if (probe) return;                     // 轮询探测阶段静默失败
-    if (bridge && !generating){
-      generating = true;
-      window.__pendingWeek = dateStr;
-      window.__pendingCurrent = false;
-      setBanner(`该周暂无数据，正在自动生成 ${s} ~ ${e}（检索需要一些时间，请稍候）…`, 'working');
-      bridge.postMessage(JSON.stringify({action:'generateWeek', week:`${s}_${e}`, endDate:e}));
-      startProbe(dateStr);
-    } else if (!bridge){
+    if (!bridge){
       setBanner('该周暂无数据，请通过桌面应用启动以自动生成。', 'waiting');
+      return;
     }
+    if (generating){
+      setBanner('已有生成任务在运行，请等它完成后再切换该周。', 'waiting');
+      return;
+    }
+    generating = true;
+    window.__pendingWeek = dateStr;
+    window.__pendingCurrent = false;
+    setBanner(`该周暂无数据，正在自动生成 ${s} ~ ${e}（检索需要一些时间，请稍候）…`, 'working');
+    bridge.postMessage(JSON.stringify({action:'generateWeek', week:`${s}_${e}`, endDate:e}));
+    startProbe(dateStr);
   };
 
-  sc.onload = () => { sc.remove(); applyEvents(); };
-  sc.onerror = () => { sc.remove(); missing(); };
+  // 快速切换日期时，动态 script 的执行顺序不保证；只接受最后一次请求的结果
+  sc.onload = () => { sc.remove(); if (seq !== loadSeq) return; applyEvents(); };
+  sc.onerror = () => { sc.remove(); if (seq !== loadSeq) return; missing(); };
   document.head.appendChild(sc);
 }
 
-/* 生成任务轮询兜底：不依赖桥回调，文件出现即加载（每 10 秒一次，最多 5 分钟） */
+/* 生成任务轮询兜底：不依赖桥回调，文件出现即加载（每 10 秒一次，最多 15 分钟，与 workflow 超时对齐） */
 let probeTimer = null, probeTries = 0;
 function startProbe(dateStr){
   stopProbe();
   probeTries = 0;
   probeTimer = setInterval(()=>{
-    if (++probeTries > 30){
+    if (++probeTries > 90){
       stopProbe();
       generating = false;
       updating = false;
@@ -1242,17 +1268,28 @@ window.onManagerResult = function(out){
   if (out.type === 'generated'){
     generating = false;
     updating = false;
+    stopProbe();
     const pending = window.__pendingWeek;
     const wasCurrent = window.__pendingCurrent;
     window.__pendingWeek = null;
     window.__pendingCurrent = false;
-    if (wasCurrent){
+    refreshWeeks();
+    // 用户已切走时不要强制跳回生成结果，避免抢走当前浏览视图
+    if (wasCurrent && viewingDate === fmtDate(bjNow())){
       setBanner('最新数据已生成，正在刷新地图…', 'ok');
       setTimeout(()=>location.reload(), 800);
       return;
     }
-    setBanner('该周数据已生成，正在加载…', 'ok');
-    if (pending) loadWeek(pending);
+    const tw = pending ? weekFor(pending) : null;
+    const dw = weekFor(desiredDate);
+    if (tw && tw.start === dw.start && tw.end === dw.end){
+      setBanner('该周数据已生成，正在加载…', 'ok');
+      loadWeek(pending);
+    } else if (tw){
+      setBanner(`数据已生成（${tw.start} ~ ${tw.end}），可在日历中选择查看。`, 'ok');
+    } else {
+      setBanner('后台数据已生成，可在日历中选择查看。', 'ok');
+    }
     return;
   }
   if (out.type === 'error'){

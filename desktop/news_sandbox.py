@@ -105,12 +105,16 @@ class DataManager:
                 proc = subprocess.run(
                     [sys.executable, str(updater), '--date', end_date],
                     capture_output=True, text=True, timeout=900)
-                if proc.returncode == 0:
+                output = (proc.stdout + proc.stderr).strip()
+                if proc.returncode == 0 and '已有更新任务在运行' in output:
+                    # workflow 被单实例锁跳过时也返回 0，不能当成生成成功
+                    out = {'type': 'error', 'ok': False,
+                           'error': '已有更新任务在运行，请稍后再试。'}
+                elif proc.returncode == 0:
                     out = {'type': 'generated', 'ok': True, 'week': week}
                 else:
-                    tail = (proc.stdout + proc.stderr).strip()[-1500:]
                     out = {'type': 'error', 'ok': False,
-                           'error': tail or 'workflow 执行失败（可能缺少 API key）'}
+                           'error': output[-1500:] or 'workflow 执行失败（可能缺少 API key）'}
             except Exception as e:
                 out = {'type': 'error', 'ok': False, 'error': str(e)}
             finally:
