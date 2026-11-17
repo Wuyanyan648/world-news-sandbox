@@ -76,6 +76,8 @@ def get_api_key(cfg):
     key = cfg.get('api_key')
     if key and not key.startswith('在此填入'):
         return key
+    if not sys.stdin.isatty():
+        raise SystemExit('未提供 API key（非交互环境请使用环境变量 NEWS_API_KEY 或 ~/.config/news-sandbox/config.json）。')
     import getpass
     key = getpass.getpass('请输入新闻 API key（输入不回显，默认不保存）：').strip()
     if not key:

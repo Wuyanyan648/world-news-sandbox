@@ -13,8 +13,12 @@
   html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--ink);
     font-family:"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",system-ui,sans-serif;
     user-select:none;-webkit-user-select:none}
-  canvas#map{position:fixed;inset:0;display:block;cursor:grab;touch-action:none}
+  canvas#map{position:fixed;inset:0;display:block;cursor:grab;touch-action:none;z-index:2}
   canvas#map.dragging{cursor:grabbing}
+  #baseLayer,#hlLayer{position:fixed;top:0;left:0;pointer-events:none;transform-origin:0 0}
+  #baseLayer{z-index:0}
+  #hlLayer{z-index:1}
+  #vigLayer{position:fixed;inset:0;pointer-events:none;z-index:3}
   canvas#fog{position:fixed;inset:0;display:block;pointer-events:none;z-index:5}
 
   /* ---------- 顶部栏 ---------- */
@@ -147,7 +151,10 @@
 </head>
 <body>
 
+<canvas id="baseLayer"></canvas>
+<canvas id="hlLayer"></canvas>
 <canvas id="map"></canvas>
+<canvas id="vigLayer"></canvas>
 <canvas id="fog"></canvas>
 
 <div id="splash">
@@ -336,9 +343,10 @@ for (const f of WORLD_GEO.features){
   if (hasPoly) features.push({name:f.properties.name, path, hlPath, bbox:[minX,minY,maxX,maxY]});
 }
 
-/* ---------- 底图预渲染 ---------- */
-const base = document.createElement('canvas');
+/* ---------- 底图预渲染（DOM 层，GPU 合成） ---------- */
+const base = document.getElementById('baseLayer');
 base.width = MAPW; base.height = MAPH;
+base.style.width = MAPW + 'px'; base.style.height = MAPH + 'px';
 (function(){
   const c = base.getContext('2d');
   c.fillStyle = '#071020'; c.fillRect(0,0,MAPW,MAPH);
@@ -360,9 +368,10 @@ base.width = MAPW; base.height = MAPH;
   for (const f of features) c.stroke(f.path);
 })();
 
-/* ---------- 高亮层 ---------- */
-const hl = document.createElement('canvas');
+/* ---------- 高亮层（DOM 层，GPU 合成） ---------- */
+const hl = document.getElementById('hlLayer');
 hl.width = HLW; hl.height = HLH;
+hl.style.width = MAPW + 'px'; hl.style.height = MAPH + 'px';
 const hctx = hl.getContext('2d');
 function renderHighlight(ev){
   hctx.clearRect(0,0,HLW,HLH);
@@ -416,11 +425,12 @@ function fitWorld(){
 const m2s = (x,y) => [x*cam.z+cam.ox, y*cam.z+cam.oy];
 const s2m = (x,y) => [(x-cam.ox)/cam.z, (y-cam.oy)/cam.z];
 
-/* ---------- 晕影 ---------- */
-const vig = document.createElement('canvas');
+/* ---------- 晕影（DOM 覆盖层，仅 resize 时重绘） ---------- */
+const vig = document.getElementById('vigLayer');
 function renderVignette(){
   if (!vw || !vh) return;
   vig.width = vw*dpr; vig.height = vh*dpr;
+  vig.style.width = vw+'px'; vig.style.height = vh+'px';
   const c = vig.getContext('2d');
   c.setTransform(dpr,0,0,dpr,0,0);
   const r0 = Math.min(vw,vh)*0.35, r1 = Math.max(vw,vh)*0.72;
@@ -460,23 +470,21 @@ for(let i=0;i<70;i++){
     ph:Math.random()*7, a:0.12+Math.random()*0.3});
 }
 
-/* ================= 渲染循环 ================= */
+/* ================= 渲染循环（静态层 GPU 合成，主 canvas 仅画动态元素） ================= */
+let lastLayerTransform = '';
 function draw(now){
-  ctx.fillStyle = '#05080f';
-  ctx.fillRect(0,0,vw,vh);
-  ctx.save();
-  ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(base, cam.ox, cam.oy, MAPW*cam.z, MAPH*cam.z);
-  ctx.drawImage(hl, cam.ox, cam.oy, MAPW*cam.z, MAPH*cam.z);
-
+  const t = `translate(${cam.ox}px,${cam.oy}px) scale(${cam.z})`;
+  if (t !== lastLayerTransform){
+    base.style.transform = t;
+    hl.style.transform = t;
+    lastLayerTransform = t;
+  }
+  ctx.clearRect(0,0,vw,vh);
   const vis = visibleEvents();
   drawArcs(vis, now);
   if (hoverCountry && !hoverEv){ drawCountryHover(); }
   drawMarkers(vis, now);
   drawEmbers(now);
-  ctx.restore();
-
-  ctx.drawImage(vig, 0, 0, vw, vh);
 }
 
 function drawArcs(vis, now){
@@ -508,6 +516,23 @@ function drawArcs(vis, now){
   ctx.restore();
 }
 
+/* 节点光晕 sprite 缓存，避免每帧创建径向渐变 */
+const glowSprites = {};
+function glowFor(color){
+  if (!glowSprites[color]){
+    const c = document.createElement('canvas');
+    c.width = c.height = 128;
+    const g = c.getContext('2d');
+    const grad = g.createRadialGradient(64,64,0,64,64,64);
+    grad.addColorStop(0, hexA(color,0.55));
+    grad.addColorStop(1, hexA(color,0));
+    g.fillStyle = grad;
+    g.fillRect(0,0,128,128);
+    glowSprites[color] = c;
+  }
+  return glowSprites[color];
+}
+
 function drawMarkers(vis, now){
   for (const ev of vis){
     const col = CATS[ev.cat].color;
@@ -517,9 +542,7 @@ function drawMarkers(vis, now){
       if (x<-60||y<-60||x>vw+60||y>vh+60) continue;
       const pulse = 3.5*Math.sin(now/380 + ev.id*1.7);
       const r = selected?10:6;
-      const g = ctx.createRadialGradient(x,y,0,x,y,r*4.5);
-      g.addColorStop(0, hexA(col,0.55)); g.addColorStop(1, hexA(col,0));
-      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x,y,r*4.5,0,7); ctx.fill();
+      ctx.drawImage(glowFor(col), x-r*4.5, y-r*4.5, r*9, r*9);
       ctx.beginPath(); ctx.arc(x,y,r+2+pulse,0,7);
       ctx.strokeStyle = hexA(col,0.85); ctx.lineWidth = 1.5; ctx.stroke();
       ctx.beginPath(); ctx.arc(x,y,r*0.62,0,7);
@@ -1019,7 +1042,13 @@ function loadWeek(dateStr){
     }
   };
   sc.onerror = () => {
-    setBanner(`该周暂无数据。可运行 python3 workflow/news_updater.py --date ${e} 生成。`, 'waiting');
+    if (bridge){
+      window.__pendingWeek = dateStr;
+      setBanner(`该周暂无数据，正在自动生成 ${s} ~ ${e}（检索需要一些时间，请稍候）…`, 'working');
+      bridge.postMessage(JSON.stringify({action:'generateWeek', week:`${s}_${e}`, endDate:e}));
+    } else {
+      setBanner(`该周暂无数据。可运行 python3 workflow/news_updater.py --date ${e} 生成。`, 'waiting');
+    }
   };
   document.head.appendChild(sc);
 }
@@ -1041,6 +1070,17 @@ function openManager(){
   bridge.postMessage(JSON.stringify({action:'list'}));
 }
 window.onManagerResult = function(out){
+  // 自动生成工作流的状态回调
+  if (out.type === 'generating') return;
+  if (out.type === 'generated'){
+    setBanner('该周数据已生成，正在加载…', 'ok');
+    if (window.__pendingWeek) loadWeek(window.__pendingWeek);
+    return;
+  }
+  if (out.type === 'error'){
+    setBanner('自动生成失败：' + (out.error || '未知错误'), 'error');
+    return;
+  }
   if (!out.ok){
     $('mgrList').innerHTML = `<div style="color:#ffb4b4;font-size:12px">${out.error||'操作失败'}</div>`;
     return;

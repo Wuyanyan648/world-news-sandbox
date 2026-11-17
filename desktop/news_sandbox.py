@@ -8,14 +8,16 @@ os.environ.setdefault('GDK_BACKEND', 'x11')
 import json
 import re
 import shutil
+import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import gi
 
 gi.require_version('Gtk', '3.0')
 gi.require_version('WebKit2', '4.1')
-from gi.repository import Gtk, WebKit2
+from gi.repository import Gtk, WebKit2, GLib
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 HTML = os.path.join(BASE, '..', 'world-news-map.html')
@@ -57,6 +59,31 @@ class DataManager:
             removed.append(f'archive/{week}')
         return {'ok': True, 'removed': removed, 'weeks': self.list_weeks()['weeks']}
 
+    def generate_week(self, week, end_date):
+        """后台线程调用独立 workflow 生成指定周数据，完成后通过 JS 回调通知。"""
+        if not re.fullmatch(r'\d{4}-\d{2}-\d{2}_\d{4}-\d{2}-\d{2}', week or ''):
+            return {'type': 'error', 'ok': False, 'error': '非法周标识'}
+        updater = Path(BASE).parent / 'workflow' / 'news_updater.py'
+
+        def run():
+            try:
+                proc = subprocess.run(
+                    [sys.executable, str(updater), '--date', end_date],
+                    capture_output=True, text=True, timeout=900)
+                if proc.returncode == 0:
+                    out = {'type': 'generated', 'ok': True, 'week': week}
+                else:
+                    tail = (proc.stdout + proc.stderr).strip()[-1500:]
+                    out = {'type': 'error', 'ok': False,
+                           'error': tail or 'workflow 执行失败（可能缺少 API key）'}
+            except Exception as e:
+                out = {'type': 'error', 'ok': False, 'error': str(e)}
+            GLib.idle_add(lambda: self.view.run_javascript(
+                f'window.onManagerResult({json.dumps(out, ensure_ascii=False)})', None, None, None))
+
+        threading.Thread(target=run, daemon=True).start()
+        return {'type': 'generating', 'ok': True, 'week': week}
+
 
 class NewsSandbox(Gtk.Application):
     def __init__(self):
@@ -72,6 +99,8 @@ class NewsSandbox(Gtk.Application):
                 out = self.manager.list_weeks()
             elif action == 'deleteWeek':
                 out = self.manager.delete_week(req.get('week', ''))
+            elif action == 'generateWeek':
+                out = self.manager.generate_week(req.get('week', ''), req.get('endDate', ''))
             else:
                 out = {'ok': False, 'error': '未知操作'}
         except Exception as e:
