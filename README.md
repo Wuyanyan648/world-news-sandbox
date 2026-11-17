@@ -48,6 +48,22 @@ python3 -m http.server 8123
 - **页面自动接力**：打开页面或停留期间，每分钟检测一次数据日期，过期则热重载并自动刷新。
 - **手动补跑**：对 TRAE 说"更新新闻"，或点击页面「检查更新」获取更新指令；更新完成后页面自动提示。
 
+### 独立更新 workflow（不依赖 TRAE）
+
+`workflow/news_updater.py` 将更新规则固化为独立流程：读取 `latestDate` 检测过期（≥1 天）→ 调用带联网搜索的 LLM API → JSON 结构化校验 → 原子写入 `news-data.js` 与 `archive/`。已最新则跳过，失败保留旧数据并记录日志（`workflow/updater.log`）。
+
+```bash
+# 配置 API（当前默认 Perplexity Sonar，自带联网搜索，单次调用即可）
+cp workflow/config.example.json workflow/config.json
+# 编辑 config.json 填入 api_key（可配置 base_url/model/proxy 切换其他模型）
+
+# 安装 systemd 用户定时器（每天 07:00 / 21:00，Persistent=true，关机错过开机自动补跑）
+bash workflow/install_timer.sh
+
+# 手动执行一次
+python3 workflow/news_updater.py
+```
+
 ## 目录结构
 
 ```
