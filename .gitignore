@@ -5,4 +5,5 @@ __pycache__/
 .DS_Store
 workflow/config.json
 workflow/updater.log
+workflow/.lock
 workflow/*.tmp
