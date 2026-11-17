@@ -5,6 +5,12 @@ import os
 # 强制 X11 后端，保证在 Wayland 桌面下窗口也能正常显示
 os.environ.setdefault('GDK_BACKEND', 'x11')
 
+import json
+import re
+import shutil
+import sys
+from pathlib import Path
+
 import gi
 
 gi.require_version('Gtk', '3.0')
@@ -14,12 +20,64 @@ from gi.repository import Gtk, WebKit2
 BASE = os.path.dirname(os.path.abspath(__file__))
 HTML = os.path.join(BASE, '..', 'world-news-map.html')
 ICON = os.path.join(BASE, 'icon.svg')
+DATA_DIR = Path(BASE).parent / 'data'
+ARCHIVE_DIR = Path(BASE).parent / 'archive'
+
+
+class DataManager:
+    """通过 JS 桥接管理本地周数据（列表/删除），浏览器端无此能力。"""
+
+    def list_weeks(self):
+        weeks = []
+        if DATA_DIR.exists():
+            for f in sorted(DATA_DIR.glob('news-*.js')):
+                m = re.fullmatch(r'news-(\d{4}-\d{2}-\d{2})_(\d{4}-\d{2}-\d{2})\.js', f.name)
+                if not m:
+                    continue
+                text = f.read_text(encoding='utf-8')
+                weeks.append({
+                    'week': f'{m.group(1)}_{m.group(2)}',
+                    'events': text.count('"id":'),
+                    'size': f.stat().st_size,
+                    'hasArchive': (ARCHIVE_DIR / f'{m.group(1)}_{m.group(2)}').exists(),
+                })
+        return {'ok': True, 'weeks': weeks}
+
+    def delete_week(self, week):
+        if not re.fullmatch(r'\d{4}-\d{2}-\d{2}_\d{4}-\d{2}-\d{2}', week or ''):
+            return {'ok': False, 'error': '非法周标识'}
+        removed = []
+        f = DATA_DIR / f'news-{week}.js'
+        if f.exists():
+            f.unlink()
+            removed.append(f.name)
+        d = ARCHIVE_DIR / week
+        if d.exists():
+            shutil.rmtree(d)
+            removed.append(f'archive/{week}')
+        return {'ok': True, 'removed': removed, 'weeks': self.list_weeks()['weeks']}
 
 
 class NewsSandbox(Gtk.Application):
     def __init__(self):
         super().__init__(application_id='cn.news.sandbox')
+        self.manager = DataManager()
         self.connect('activate', self.on_activate)
+
+    def on_manager_message(self, ucm, result):
+        try:
+            req = json.loads(result.get_js_value().to_string())
+            action = req.get('action')
+            if action == 'list':
+                out = self.manager.list_weeks()
+            elif action == 'deleteWeek':
+                out = self.manager.delete_week(req.get('week', ''))
+            else:
+                out = {'ok': False, 'error': '未知操作'}
+        except Exception as e:
+            out = {'ok': False, 'error': str(e)}
+        self.view.run_javascript(
+            f'window.onManagerResult({json.dumps(out, ensure_ascii=False)})', None, None, None)
 
     def on_activate(self, app):
         win = Gtk.ApplicationWindow(application=app, title='寰宇战情 · 世界新闻沙盘')
@@ -35,13 +93,19 @@ class NewsSandbox(Gtk.Application):
         settings.set_property('allow-file-access-from-file-urls', True)
         settings.set_property('enable-webgl', True)
 
-        view = WebKit2.WebView(settings=settings)
-        view.load_uri('file://' + HTML)
-        win.add(view)
+        self.view = WebKit2.WebView(settings=settings)
+        ucm = self.view.get_user_content_manager()
+        ucm.register_script_message_handler('newsManager')
+        ucm.connect('script-message-received', self.on_manager_message)
+        self.view.load_uri('file://' + HTML)
+        win.add(self.view)
 
         win.connect('destroy', lambda *_: app.quit())
         win.show_all()
         win.present()
+        if '--open-manager' in sys.argv:
+            self.view.connect('load-changed',
+                              lambda v, ev: v.run_javascript('openManager && openManager();', None, None, None))
 
 
 def main():

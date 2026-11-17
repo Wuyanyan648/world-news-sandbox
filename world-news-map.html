@@ -34,6 +34,17 @@
   #datePicker{background:rgba(16,26,44,.85);border:1px solid var(--line);color:var(--ink);font-size:12px;
     padding:7px 10px;border-radius:4px;color-scheme:dark;letter-spacing:1px}
   #datePicker:hover{border-color:var(--gold)}
+  #mgrModal{position:fixed;inset:0;z-index:50;background:rgba(3,6,12,.65);display:flex;align-items:center;justify-content:center}
+  #mgrCard{position:relative;width:540px;max-width:92vw;max-height:76vh;overflow:auto;background:rgba(13,20,34,.97);
+    border:1px solid var(--line);border-radius:10px;padding:20px 22px;box-shadow:0 12px 50px rgba(0,0,0,.6)}
+  #mgrCard h2{font-family:Georgia,"Songti SC",serif;font-size:17px;color:var(--gold2);letter-spacing:3px;margin-bottom:6px}
+  #mgrCard .mgr-sub{font-size:12px;color:var(--muted);margin-bottom:14px}
+  .mgr-row{display:flex;align-items:center;gap:10px;padding:10px 6px;border-bottom:1px solid rgba(38,54,79,.5);font-size:12.5px}
+  .mgr-row .w-name{color:var(--ink);letter-spacing:1px}
+  .mgr-row .w-meta{color:var(--muted);font-size:11px;margin-left:auto}
+  .mgr-del{background:rgba(185,28,28,.15);border:1px solid rgba(255,93,93,.45);color:#ffb4b4;font-size:11px;
+    padding:3px 10px;border-radius:4px;cursor:pointer}
+  .mgr-del:hover{background:rgba(185,28,28,.35)}
   #updateBanner{position:fixed;top:86px;left:50%;transform:translateX(-50%);z-index:30;
     background:rgba(13,20,34,.95);border:1px solid var(--gold);border-radius:6px;padding:10px 20px;
     font-size:12.5px;color:var(--gold2);letter-spacing:1px;box-shadow:0 4px 24px rgba(0,0,0,.5);
@@ -158,6 +169,7 @@
   <div class="spacer"></div>
   <button class="btn" id="btnList">新闻卷轴</button>
   <input type="date" id="datePicker" title="选择日期，查看该日期所在周的新闻（历史学习）">
+  <button class="btn" id="btnManager">数据管理</button>
   <button class="btn" id="btnUpdate">检查更新</button>
   <button class="btn" id="btnReset">复位视野</button>
 </header>
@@ -191,6 +203,14 @@
 
 <div id="tooltip" class="hidden"></div>
 <div id="updateBanner" class="hidden"><span id="ubText"></span><span class="ub-close" id="ubClose">×</span></div>
+<div id="mgrModal" class="hidden">
+  <div id="mgrCard">
+    <button class="pn-close" id="mgrClose">×</button>
+    <h2>数据管理</h2>
+    <div class="mgr-sub">本地周数据（data/ 与 archive/），删除后立即生效且不可恢复</div>
+    <div id="mgrList"></div>
+  </div>
+</div>
 <div id="hint">拖拽平移 · 滚轮缩放 · 点击节点查看详情 · 双击放大</div>
 
 <script>document.write('<script src="news-data.js?t='+Date.now()+'"><\/script>')</script>
@@ -1008,6 +1028,48 @@ $('datePicker').addEventListener('change', e => {
 });
 $('datePicker').value = fmtDate(bjNow());
 $('datePicker').max = fmtDate(bjNow());
+
+/* ================= 本地数据管理（桌面应用 JS 桥接） ================= */
+const bridge = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.newsManager;
+function openManager(){
+  if (!bridge){
+    setBanner('数据删除需在桌面应用中使用（浏览器无法操作本地文件）。', 'waiting');
+    return;
+  }
+  $('mgrModal').classList.remove('hidden');
+  $('mgrList').innerHTML = '<div style="color:var(--muted);font-size:12px">正在读取本地数据…</div>';
+  bridge.postMessage(JSON.stringify({action:'list'}));
+}
+window.onManagerResult = function(out){
+  if (!out.ok){
+    $('mgrList').innerHTML = `<div style="color:#ffb4b4;font-size:12px">${out.error||'操作失败'}</div>`;
+    return;
+  }
+  if (out.removed && out.removed.length){
+    setBanner(`已删除：${out.removed.join('、')}（重新打开或切换日期后生效）`, 'ok');
+  }
+  const weeks = out.weeks || [];
+  if (!weeks.length){
+    $('mgrList').innerHTML = '<div style="color:var(--muted);font-size:12px">暂无周数据</div>';
+    return;
+  }
+  $('mgrList').innerHTML = weeks.map(w=>`
+    <div class="mgr-row">
+      <span class="w-name">${w.week.replace('_',' ~ ')}</span>
+      <span class="w-meta">${w.events} 条 · ${(w.size/1024).toFixed(1)}KB ${w.hasArchive?'· 含归档':''}</span>
+      <button class="mgr-del" data-week="${w.week}">删除</button>
+    </div>`).join('');
+  $('mgrList').querySelectorAll('.mgr-del').forEach(b=>{
+    b.onclick = ()=>{
+      const wk = b.dataset.week;
+      if (!confirm(`确定删除 ${wk} 的数据文件和归档目录？不可恢复。`)) return;
+      bridge.postMessage(JSON.stringify({action:'deleteWeek', week:wk}));
+    };
+  });
+};
+$('btnManager').onclick = openManager;
+$('mgrClose').onclick = ()=>$('mgrModal').classList.add('hidden');
+$('mgrModal').addEventListener('click', e=>{ if(e.target===$('mgrModal')) $('mgrModal').classList.add('hidden'); });
 
 requestAnimationFrame(frame);
 
