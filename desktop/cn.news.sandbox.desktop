@@ -1,12 +1,14 @@
 [Desktop Entry]
+Type=Application
 Name=国际新闻沙盘
 Name[en]=World News Sandbox
+GenericName=World News Map
 Comment=交互式国际新闻世界地图（寰宇战情）
 Comment[en]=Interactive world news map
 Exec=python3 /home/xzh-wuyan/eric/news/desktop/news_sandbox.py
-Icon=/home/xzh-wuyan/eric/news/desktop/icon.svg
+Icon=world-news-sandbox
 Terminal=false
-Type=Application
 Categories=News;Education;
-Keywords=news;world;map;
-StartupWMClass=cn.news.sandbox
+Keywords=news;world;map;sandbox;
+StartupNotify=true
+StartupWMClass=WorldNewsSandbox

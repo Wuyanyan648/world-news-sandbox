@@ -18,13 +18,32 @@ import gi
 
 gi.require_version('Gtk', '3.0')
 gi.require_version('WebKit2', '4.1')
-from gi.repository import Gtk, WebKit2, GLib
+gi.require_version('Gdk', '3.0')
+from gi.repository import Gtk, WebKit2, GLib, Gdk
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 HTML = os.path.join(BASE, '..', 'world-news-map.html')
 ICON = os.path.join(BASE, 'icon.svg')
+ICON_NAME = 'world-news-sandbox'
+APP_ID = 'cn.news.sandbox'
+WM_CLASS = 'WorldNewsSandbox'
 DATA_DIR = Path(BASE).parent / 'data'
 ARCHIVE_DIR = Path(BASE).parent / 'archive'
+
+
+def setup_identity():
+    """设置程序名与 WM_CLASS，使桌面环境能把窗口匹配到 .desktop（图标/名称正确）。"""
+    GLib.set_prgname('world-news-sandbox')
+    GLib.set_application_name('国际新闻沙盘')
+    try:
+        Gdk.set_program_class(WM_CLASS)
+    except Exception:
+        pass
+    # 图标优先使用已安装到图标主题的同名图标，缺失时回退到本地 SVG
+    try:
+        Gtk.Window.set_default_icon_from_file(ICON)
+    except Exception:
+        pass
 
 
 class DataManager:
@@ -100,7 +119,7 @@ class DataManager:
 
 class NewsSandbox(Gtk.Application):
     def __init__(self):
-        super().__init__(application_id='cn.news.sandbox')
+        super().__init__(application_id=APP_ID)
         self.manager = DataManager()
         self.view = None
         self.win = None
@@ -131,10 +150,13 @@ class NewsSandbox(Gtk.Application):
         win = Gtk.ApplicationWindow(application=app, title='寰宇战情 · 世界新闻沙盘')
         self.win = win
         win.set_default_size(1600, 1000)
+        win.set_wmclass('world-news-sandbox', WM_CLASS)
+        win.set_icon_name(ICON_NAME)
         try:
             win.set_icon_from_file(ICON)
         except Exception:
             pass
+        win.set_title('寰宇战情 · 世界新闻沙盘')
         win.maximize()
 
         settings = WebKit2.Settings()
@@ -162,6 +184,7 @@ class NewsSandbox(Gtk.Application):
 def main():
     if not os.path.exists(HTML):
         raise SystemExit(f'未找到地图文件: {HTML}')
+    setup_identity()
     app = NewsSandbox()
     app.run(None)
 
