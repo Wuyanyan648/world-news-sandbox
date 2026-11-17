@@ -51,6 +51,7 @@ class DataManager:
 
     def __init__(self):
         self._generating = set()
+        self.view = None
 
     def list_weeks(self):
         weeks = []
@@ -152,7 +153,6 @@ class NewsSandbox(Gtk.Application):
         win = Gtk.ApplicationWindow(application=app, title='寰宇战情 · 世界新闻沙盘')
         self.win = win
         win.set_default_size(1600, 1000)
-        win.set_wmclass('world-news-sandbox', WM_CLASS)
         win.set_icon_name(ICON_NAME)
         try:
             win.set_icon_from_file(ICON)
@@ -167,6 +167,7 @@ class NewsSandbox(Gtk.Application):
         settings.set_property('enable-webgl', True)
 
         self.view = WebKit2.WebView(settings=settings)
+        self.manager.view = self.view          # 生成完成回调需要用它推消息给页面
         ucm = self.view.get_user_content_manager()
         ucm.register_script_message_handler('newsManager')
         ucm.connect('script-message-received', self.on_manager_message)
