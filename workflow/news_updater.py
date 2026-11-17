@@ -146,7 +146,7 @@ def validate(data):
     return data
 
 
-def write_outputs(data, today):
+def write_outputs(data, target, is_current):
     latest = data['latestDate']
     events = data['events']
     generated = datetime.now(BJT).isoformat(timespec='seconds')
@@ -154,38 +154,58 @@ def write_outputs(data, today):
                f'  latestDate: "{latest}",\n'
                f'  generatedAt: "{generated}",\n'
                '  events: ' + json.dumps(events, ensure_ascii=False, indent=2) + '\n};\n')
-    tmp = DATA_FILE.with_suffix('.tmp')
-    tmp.write_text(payload, encoding='utf-8')
-    tmp.replace(DATA_FILE)
 
-    start = (datetime.strptime(today, '%Y-%m-%d') - timedelta(days=6)).strftime('%Y-%m-%d')
-    week_dir = ARCHIVE_DIR / f'{start}_{today}'
+    start = (datetime.strptime(target, '%Y-%m-%d') - timedelta(days=7)).strftime('%Y-%m-%d')
+    # 每周数据独立保存，供页面按指定日期热切换
+    data_dir = BASE / 'data'
+    data_dir.mkdir(exist_ok=True)
+    (data_dir / f'news-{start}_{target}.js').write_text(payload, encoding='utf-8')
+    # 仅当前周更新主数据文件（latestDate 驱动页面自动更新）
+    if is_current:
+        tmp = DATA_FILE.with_suffix('.tmp')
+        tmp.write_text(payload, encoding='utf-8')
+        tmp.replace(DATA_FILE)
+
+    week_dir = ARCHIVE_DIR / f'{start}_{target}'
     week_dir.mkdir(parents=True, exist_ok=True)
     by_day = {}
     for ev in events:
         by_day.setdefault(ev['d'], []).append(ev)
     for day, items in by_day.items():
-        y, m, d = today.split('-')[0], *day.split('-')
+        y, m, d = target.split('-')[0], *day.split('-')
         lines = [f'# {y}-{m}-{d} 国际新闻\n']
         for ev in items:
             lines.append(f"## {ev['title']}\n")
             lines.append(ev['sum'] + '\n')
             lines.append('来源：' + '、'.join(f"[{l['t']}]({l['u']})" for l in ev['links']) + '\n')
         (week_dir / f'{y}-{m}-{d}.md').write_text('\n'.join(lines), encoding='utf-8')
+    log(f'数据已写入 data/news-{start}_{target}.js 与 archive/{start}_{target}/')
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description='国际新闻独立更新 workflow')
+    parser.add_argument('--date', help='指定截止日期 YYYY-MM-DD，检索该日期及其前7天的新闻（用于历史数据或测试）')
+    args = parser.parse_args()
+
     today = datetime.now(BJT).strftime('%Y-%m-%d')
-    latest = current_latest()
-    if latest and latest >= today:
-        log(f'数据已最新（{latest}），跳过更新。')
-        return 0
-    log(f'数据过期（latestDate={latest}，今天={today}），开始 workflow 更新。')
+    target = args.date or today
+    datetime.strptime(target, '%Y-%m-%d')
+    is_current = (target == today)
+
+    if not args.date:
+        latest = current_latest()
+        if latest and latest >= today:
+            log(f'数据已最新（{latest}），跳过更新。')
+            return 0
+        log(f'数据过期（latestDate={latest}，今天={today}），开始 workflow 更新。')
+    else:
+        log(f'指定日期更新：检索截至 {target} 及其前7天的新闻。')
     cfg = load_config()
     try:
-        raw = call_llm(cfg, today)
+        raw = call_llm(cfg, target)
         data = validate(parse_json(raw))
-        write_outputs(data, today)
+        write_outputs(data, target, is_current)
         log(f"更新完成：latestDate={data['latestDate']}，事件 {len(data['events'])} 条。")
         return 0
     except (urllib.error.URLError, ValueError, KeyError, json.JSONDecodeError) as e:

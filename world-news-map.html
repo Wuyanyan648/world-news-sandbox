@@ -31,6 +31,9 @@
   #clock .tz{display:block;font-size:10px;color:var(--muted);letter-spacing:2px;text-align:center;margin-top:2px}
   #staleBadge{font-size:11px;color:#ffb4b4;background:rgba(185,28,28,.18);border:1px solid rgba(255,93,93,.5);
     padding:2px 9px;border-radius:999px;letter-spacing:1px;white-space:nowrap}
+  #datePicker{background:rgba(16,26,44,.85);border:1px solid var(--line);color:var(--ink);font-size:12px;
+    padding:7px 10px;border-radius:4px;color-scheme:dark;letter-spacing:1px}
+  #datePicker:hover{border-color:var(--gold)}
   #updateBanner{position:fixed;top:86px;left:50%;transform:translateX(-50%);z-index:30;
     background:rgba(13,20,34,.95);border:1px solid var(--gold);border-radius:6px;padding:10px 20px;
     font-size:12.5px;color:var(--gold2);letter-spacing:1px;box-shadow:0 4px 24px rgba(0,0,0,.5);
@@ -154,6 +157,7 @@
   </div>
   <div class="spacer"></div>
   <button class="btn" id="btnList">新闻卷轴</button>
+  <input type="date" id="datePicker" title="选择日期，查看该日期所在周的新闻（历史学习）">
   <button class="btn" id="btnUpdate">检查更新</button>
   <button class="btn" id="btnReset">复位视野</button>
 </header>
@@ -968,6 +972,42 @@ function checkStale(){
 }
 checkStale();
 setInterval(checkStale, 60000);
+
+/* ================= 指定日期（历史周数据热切换） ================= */
+function fmtDate(d){ return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; }
+function loadWeek(dateStr){
+  const end = new Date(dateStr + 'T00:00:00');
+  const start = new Date(end);
+  start.setDate(start.getDate() - 7);
+  const s = fmtDate(start), e = fmtDate(end);
+  setBanner(`正在加载 ${s} ~ ${e} 的新闻数据…`, 'working');
+  const sc = document.createElement('script');
+  sc.src = `data/news-${s}_${e}.js?t=` + Date.now();
+  sc.onload = () => {
+    if (window.NEWS_DATA && Array.isArray(window.NEWS_DATA.events)){
+      EVENTS.length = 0;
+      EVENTS.push(...window.NEWS_DATA.events);
+      day = 'all';
+      selId = null;
+      renderHighlight(null);
+      buildChips();
+      buildLegend();
+      buildStats();
+      rebuildDrawer();
+      fitWorld();
+      setBanner(`已切换到 ${s} ~ ${e}（${EVENTS.length} 条事件）`, 'ok');
+    }
+  };
+  sc.onerror = () => {
+    setBanner(`该周暂无数据。可运行 python3 workflow/news_updater.py --date ${e} 生成。`, 'waiting');
+  };
+  document.head.appendChild(sc);
+}
+$('datePicker').addEventListener('change', e => {
+  if (e.target.value) loadWeek(e.target.value);
+});
+$('datePicker').value = fmtDate(bjNow());
+$('datePicker').max = fmtDate(bjNow());
 
 requestAnimationFrame(frame);
 
