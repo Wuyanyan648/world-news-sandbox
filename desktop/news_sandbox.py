@@ -60,9 +60,11 @@ class DataManager:
                 if not m:
                     continue
                 text = f.read_text(encoding='utf-8')
+                # 兼容两种历史格式：JSON 生成的 "id": 1 与早期手写的 id: 1
+                count = len(re.findall(r'(?:"id"|\bid)\s*:\s*\d+', text))
                 weeks.append({
                     'week': f'{m.group(1)}_{m.group(2)}',
-                    'events': text.count('"id":'),
+                    'events': count,
                     'size': f.stat().st_size,
                     'hasArchive': (ARCHIVE_DIR / f'{m.group(1)}_{m.group(2)}').exists(),
                 })

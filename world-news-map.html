@@ -1040,13 +1040,14 @@ setInterval(checkStale, 60000);
 
 /* ================= 指定日期（历史周数据热切换） ================= */
 function fmtDate(d){ return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; }
-function loadWeek(dateStr){
+function loadWeek(dateStr, opts){
+  const probe = !!(opts && opts.probe);
   const end = new Date(dateStr + 'T00:00:00');
-  if (isNaN(end.getTime())){ setBanner('日期无效。', 'error'); return; }
+  if (isNaN(end.getTime())){ if(!probe) setBanner('日期无效。', 'error'); return; }
   const start = new Date(end);
   start.setDate(start.getDate() - 7);
   const s = fmtDate(start), e = fmtDate(end);
-  setBanner(`正在加载 ${s} ~ ${e} 的新闻数据…`, 'working');
+  if (!probe) setBanner(`正在加载 ${s} ~ ${e} 的新闻数据…`, 'working');
 
   const sc = document.createElement('script');
   sc.src = `data/news-${s}_${e}.js?t=` + Date.now();
@@ -1054,7 +1055,13 @@ function loadWeek(dateStr){
   const applyEvents = () => {
     const list = (window.NEWS_DATA && Array.isArray(window.NEWS_DATA.events))
       ? window.NEWS_DATA.events : [];
-    if (!list.length){ missing(); return; }
+    // 校验加载到的确实是本周数据，避免旧数据被误当成新周
+    const ld = (window.NEWS_DATA && window.NEWS_DATA.latestDate) || '';
+    if (!list.length || ld < s || ld > e){ missing(); return; }
+    stopProbe();
+    generating = false;
+    window.__pendingWeek = null;
+    window.__pendingCurrent = false;
     EVENTS.length = 0;
     EVENTS.push(...list);
     viewingDate = e;
@@ -1073,12 +1080,14 @@ function loadWeek(dateStr){
   };
 
   const missing = () => {
+    if (probe) return;                     // 轮询探测阶段静默失败
     if (bridge && !generating){
       generating = true;
       window.__pendingWeek = dateStr;
       window.__pendingCurrent = false;
       setBanner(`该周暂无数据，正在自动生成 ${s} ~ ${e}（检索需要一些时间，请稍候）…`, 'working');
       bridge.postMessage(JSON.stringify({action:'generateWeek', week:`${s}_${e}`, endDate:e}));
+      startProbe(dateStr);
     } else if (!bridge){
       setBanner('该周暂无数据，请通过桌面应用启动以自动生成。', 'waiting');
     }
@@ -1087,6 +1096,25 @@ function loadWeek(dateStr){
   sc.onload = () => { sc.remove(); applyEvents(); };
   sc.onerror = () => { sc.remove(); missing(); };
   document.head.appendChild(sc);
+}
+
+/* 生成任务轮询兜底：不依赖桥回调，文件出现即加载（每 10 秒一次，最多 5 分钟） */
+let probeTimer = null, probeTries = 0;
+function startProbe(dateStr){
+  stopProbe();
+  probeTries = 0;
+  probeTimer = setInterval(()=>{
+    if (++probeTries > 30){
+      stopProbe();
+      generating = false;
+      setBanner('自动生成超时，请检查 workflow/updater.log 或稍后重试。', 'error');
+      return;
+    }
+    loadWeek(dateStr, {probe:true});
+  }, 10000);
+}
+function stopProbe(){
+  if (probeTimer){ clearInterval(probeTimer); probeTimer = null; }
 }
 $('datePicker').addEventListener('change', e => {
   if (e.target.value) loadWeek(e.target.value);
@@ -1127,6 +1155,7 @@ window.onManagerResult = function(out){
   if (out.type === 'error'){
     generating = false;
     updating = false;
+    stopProbe();
     window.__pendingWeek = null;
     window.__pendingCurrent = false;
     $('staleBadge').classList.toggle('hidden', dayDiffFromLatest() < 1);
