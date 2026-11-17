@@ -2,5 +2,20 @@
   "provider": "deepseek",
   "model": "deepseek-flash",
   "base_url": "https://api.deepseek.com/chat/completions",
-  "proxy": ""
+  "proxy": "http://127.0.0.1:7897",
+  "feeds": {
+    "enabled": true,
+    "ttl_days": 7,
+    "per_source": 6,
+    "youtube_channels": [
+      {"name": "BBC News", "channel_id": "UC16niRr50-MSBwiO3YDb3RA"},
+      {"name": "Al Jazeera English", "channel_id": "UCNye-wNBqNL5ZzHSJj3l8Bg"},
+      {"name": "DW News", "channel_id": "UCknLrEdhRCp1aegoMqRaCZg"},
+      {"name": "Sky News", "channel_id": "UCoMdktPbSTixAyNGwb-UYkQ"},
+      {"name": "France 24 English", "channel_id": "UCQfwfsi5VrQ8yKZ-UWmAEFg"}
+    ],
+    "x_accounts": [],
+    "rsshub_base": "",
+    "custom_feeds": []
+  }
 }

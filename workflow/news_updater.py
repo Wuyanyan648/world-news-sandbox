@@ -15,6 +15,9 @@ import urllib.error
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from feeds import fetch_feeds, build_leads_block
+
 BASE = Path(__file__).resolve().parent.parent
 DATA_FILE = BASE / 'news-data.js'
 ARCHIVE_DIR = BASE / 'archive'
@@ -25,6 +28,14 @@ BJT = timezone(timedelta(hours=8))
 CATS = {'war', 'diplomacy', 'economy', 'tech', 'climate', 'politics', 'disaster'}
 
 PROMPT = """请检索最近 7 天（截至 {today}）的国际重大新闻，覆盖地缘政治、军事冲突、外交、经济金融、科技、气候灾害等领域，使用联网搜索获取真实信息，重要事件多信源交叉核实。
+
+以下是刚从 X / YouTube 等平台抓取的最新线索（标题可能简略、可能有噪音）：
+{leads}
+
+要求：
+- 这些线索只作为“更快的发现渠道”，必须用联网检索核实细节后再收录，无法核实的不要写成确定事实。
+- 若某条线索来自 X/YouTube 且核实成立，链接优先给原始权威报道；确实只有平台信息时，可标注“据社交平台消息”。
+- 优先收录近 48 小时内发生、传统媒体尚未充分报道的事件。
 
 严格只输出一个 JSON 对象（不要任何解释、不要 markdown 代码围栏），结构如下：
 {{
@@ -99,12 +110,12 @@ def current_latest():
     return m.group(1) if m else None
 
 
-def call_llm(cfg, today):
+def call_llm(cfg, today, leads=''):
     payload = {
         'model': cfg.get('model', 'deepseek-flash'),
         'messages': [
             {'role': 'system', 'content': '你是国际新闻检索与结构化助手，使用联网检索获取真实最新新闻，严格输出 JSON。'},
-            {'role': 'user', 'content': PROMPT.format(today=today)},
+            {'role': 'user', 'content': PROMPT.format(today=today, leads=leads)},
         ],
         'temperature': 0.2,
     }
@@ -301,7 +312,11 @@ def main():
         log(f'指定日期更新：检索截至 {target} 及其前7天的新闻。')
     cfg = load_config()
     try:
-        raw = call_llm(cfg, target)
+        leads_items = fetch_feeds(cfg, target, log)
+        leads = build_leads_block(leads_items)
+        if leads_items:
+            log(f'外部情报源共获取 {len(leads_items)} 条线索。')
+        raw = call_llm(cfg, target, leads)
         data = normalize(parse_json(raw), target)
         write_outputs(data, target, is_current)
         log(f"更新完成：latestDate={data['latestDate']}，事件 {len(data['events'])} 条。")

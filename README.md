@@ -46,6 +46,14 @@ python3 desktop/news_sandbox.py
 
 默认使用 **DeepSeek V4.1 Flash**（`deepseek-flash` + 服务端 `deepseek_web_search` 联网工具，成本低、单次调用完成检索与结构化），也可通过 `workflow/config.json` 的 `base_url`/`model`/`proxy` 切换到 Perplexity 等其他模型。
 
+**外部情报源（X / YouTube）**：传统媒体权威但有时滞后，workflow 会先抓取配置的 RSS 线索注入提示词，再让模型联网核实后收录：
+
+- `youtube_channels`：YouTube 频道原生 RSS（`channel_id`），无需 API key。
+- `x_accounts` + `rsshub_base`：X 需通过 RSSHub/Nitter 实例转 RSS（X 官方 API 免费层不支持搜索）。
+- `custom_feeds`：任意 RSS/Atom 源。
+- `ttl_days` / `per_source`：时间窗口与每源条数上限；`proxy` 走本机代理。
+- 任一源失败只记录日志，不影响主流程；线索仅作发现渠道，事实必须联网核实后才收录。
+
 ```bash
 # 配置 API key（DeepSeek）
 # 方式一：环境变量（推荐，不进任何文件）
