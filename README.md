@@ -55,10 +55,12 @@ python3 -m http.server 8123
 
 `workflow/news_updater.py` 将更新规则固化为独立流程：读取 `latestDate` 检测过期（≥1 天）→ 调用带联网搜索的 LLM API → JSON 结构化校验 → 原子写入 `news-data.js` 与 `archive/`。已最新则跳过，失败保留旧数据并记录日志（`workflow/updater.log`）。
 
+默认使用 **DeepSeek V4.1 Flash**（`deepseek-flash` + 服务端 `deepseek_web_search` 联网工具，成本低、单次调用完成检索与结构化），也可通过 `workflow/config.json` 的 `base_url`/`model`/`proxy` 切换到 Perplexity 等其他模型。
+
 ```bash
-# 配置 API（当前默认 Perplexity Sonar，自带联网搜索，单次调用即可）
+# 配置 API key（DeepSeek）
 # 方式一：环境变量（推荐，不进任何文件）
-export NEWS_API_KEY="你的key"
+export NEWS_API_KEY="你的DeepSeek key"   # 或 export DEEPSEEK_API_KEY="你的key"
 # 方式二：用户级私有配置 ~/.config/news-sandbox/config.json（600权限，不进git）
 # 方式三：直接运行脚本，交互式输入（不回显，可选保存为600私有配置）
 python3 workflow/news_updater.py

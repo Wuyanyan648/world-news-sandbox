@@ -66,7 +66,7 @@ PRIVATE_CONFIG = Path.home() / '.config' / 'news-sandbox' / 'config.json'
 
 def get_api_key(cfg):
     """按安全优先级读取 API key：环境变量 → 用户级私有配置 → 项目配置 → 交互式输入。"""
-    for var in ('NEWS_API_KEY', 'PERPLEXITY_API_KEY', 'MOONSHOT_API_KEY'):
+    for var in ('NEWS_API_KEY', 'DEEPSEEK_API_KEY', 'PERPLEXITY_API_KEY', 'MOONSHOT_API_KEY'):
         if os.environ.get(var):
             return os.environ[var]
     if PRIVATE_CONFIG.exists():
@@ -100,15 +100,19 @@ def current_latest():
 
 def call_llm(cfg, today):
     payload = {
-        'model': cfg.get('model', 'sonar-pro'),
+        'model': cfg.get('model', 'deepseek-flash'),
         'messages': [
             {'role': 'system', 'content': '你是国际新闻检索与结构化助手，使用联网检索获取真实最新新闻，严格输出 JSON。'},
             {'role': 'user', 'content': PROMPT.format(today=today)},
         ],
         'temperature': 0.2,
     }
+    if cfg.get('provider', 'deepseek') == 'deepseek':
+        # DeepSeek 服务端联网搜索工具（非思考模式，客户端无需处理工具循环）
+        payload['tools'] = [{'type': 'deepseek_web_search', 'name': 'deepseek_web_search'}]
+        payload['thinking'] = {'type': 'disabled'}
     req = urllib.request.Request(
-        cfg.get('base_url', 'https://api.perplexity.ai/chat/completions'),
+        cfg.get('base_url', 'https://api.deepseek.com/chat/completions'),
         data=json.dumps(payload).encode('utf-8'),
         headers={'Content-Type': 'application/json', 'Authorization': f"Bearer {get_api_key(cfg)}"},
         method='POST',

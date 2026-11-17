@@ -1,7 +1,6 @@
 {
-  "provider": "perplexity",
-  "api_key": "在此填入你的API key",
-  "model": "sonar-pro",
-  "base_url": "https://api.perplexity.ai/chat/completions",
+  "provider": "deepseek",
+  "model": "deepseek-flash",
+  "base_url": "https://api.deepseek.com/chat/completions",
   "proxy": ""
 }
