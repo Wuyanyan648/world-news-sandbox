@@ -67,13 +67,14 @@ PRIVATE_CONFIG = Path.home() / '.config' / 'news-sandbox' / 'config.json'
 def get_api_key(cfg):
     """按安全优先级读取 API key：环境变量 → 用户级私有配置 → 项目配置 → 交互式输入。"""
     for var in ('NEWS_API_KEY', 'DEEPSEEK_API_KEY', 'PERPLEXITY_API_KEY', 'MOONSHOT_API_KEY'):
-        if os.environ.get(var):
-            return os.environ[var]
+        val = (os.environ.get(var) or '').strip()
+        if val:
+            return val
     if PRIVATE_CONFIG.exists():
-        key = json.loads(PRIVATE_CONFIG.read_text(encoding='utf-8')).get('api_key')
+        key = (json.loads(PRIVATE_CONFIG.read_text(encoding='utf-8')).get('api_key') or '').strip()
         if key:
             return key
-    key = cfg.get('api_key')
+    key = (cfg.get('api_key') or '').strip()
     if key and not key.startswith('在此填入'):
         return key
     if not sys.stdin.isatty():
@@ -111,19 +112,32 @@ def call_llm(cfg, today):
         # DeepSeek 服务端联网搜索工具（非思考模式，客户端无需处理工具循环）
         payload['tools'] = [{'type': 'deepseek_web_search', 'name': 'deepseek_web_search'}]
         payload['thinking'] = {'type': 'disabled'}
-    req = urllib.request.Request(
-        cfg.get('base_url', 'https://api.deepseek.com/chat/completions'),
-        data=json.dumps(payload).encode('utf-8'),
-        headers={'Content-Type': 'application/json', 'Authorization': f"Bearer {get_api_key(cfg)}"},
-        method='POST',
-    )
+
     proxy = cfg.get('proxy') or os.environ.get('https_proxy')
+    handlers = []
     if proxy:
-        urllib.request.install_opener(urllib.request.build_opener(
-            urllib.request.ProxyHandler({'http': proxy, 'https': proxy})))
-    with urllib.request.urlopen(req, timeout=180) as resp:
-        body = json.loads(resp.read().decode('utf-8'))
-    return body['choices'][0]['message']['content']
+        handlers.append(urllib.request.ProxyHandler({'http': proxy, 'https': proxy}))
+    opener = urllib.request.build_opener(*handlers)
+
+    last_err = None
+    for attempt in range(3):
+        req = urllib.request.Request(
+            cfg.get('base_url', 'https://api.deepseek.com/chat/completions'),
+            data=json.dumps(payload).encode('utf-8'),
+            headers={'Content-Type': 'application/json',
+                     'Authorization': f"Bearer {get_api_key(cfg)}"},
+            method='POST',
+        )
+        try:
+            with opener.open(req, timeout=300) as resp:
+                body = json.loads(resp.read().decode('utf-8'))
+            return body['choices'][0]['message']['content']
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            last_err = e
+            if attempt < 2:
+                log(f'第 {attempt + 1} 次请求失败（{e}），5 秒后重试。')
+                time.sleep(5)
+    raise urllib.error.URLError(f'重试 3 次仍失败: {last_err}')
 
 
 def parse_json(text):
@@ -135,21 +149,81 @@ def parse_json(text):
     return json.loads(text[start:end + 1])
 
 
-def validate(data):
-    if not isinstance(data.get('events'), list) or not data['events']:
-        raise ValueError('events 为空')
-    if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', data.get('latestDate', '')):
-        raise ValueError('latestDate 格式错误')
-    for ev in data['events']:
-        if ev.get('cat') not in CATS:
-            raise ValueError(f"非法分类: {ev.get('cat')}")
-        if not ev.get('locs'):
-            raise ValueError('缺少 locs')
-        for loc in ev['locs']:
-            float(loc['lat']); float(loc['lng'])
-        if not ev.get('links'):
-            raise ValueError('缺少信源链接')
-    return data
+def normalize(data, target):
+    """校验并清洗模型输出：日期必须在检索窗口内、坐标合法、id 唯一、rel 指向有效事件。"""
+    target_dt = datetime.strptime(target, '%Y-%m-%d')
+    start_dt = target_dt - timedelta(days=7)
+
+    events, id_map, dropped = [], {}, 0
+    for raw in data.get('events') or []:
+        try:
+            d = str(raw.get('d', '')).strip()
+            if not re.fullmatch(r'\d{2}-\d{2}', d):
+                raise ValueError('d 格式')
+            month, dom = map(int, d.split('-'))
+            day_dt = datetime(target_dt.year, month, dom)
+            if day_dt > target_dt:
+                day_dt = day_dt.replace(year=target_dt.year - 1)
+            if not (start_dt <= day_dt <= target_dt):
+                raise ValueError('事件日期不在检索窗口内')
+
+            cat = raw.get('cat')
+            if cat not in CATS:
+                raise ValueError('分类非法')
+
+            title = str(raw.get('title') or '').strip()
+            if not title:
+                raise ValueError('标题为空')
+
+            locs = []
+            for loc in raw.get('locs') or []:
+                lat, lng = float(loc['lat']), float(loc['lng'])
+                if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+                    raise ValueError('坐标越界')
+                locs.append({'n': str(loc.get('n') or '事发地'), 'lat': lat, 'lng': lng})
+            if not locs:
+                raise ValueError('缺少地点')
+
+            links = [{'t': str(l.get('t') or '来源'), 'u': str(l.get('u'))}
+                     for l in (raw.get('links') or [])
+                     if str(l.get('u', '')).startswith('http')]
+            if not links:
+                raise ValueError('缺少有效信源链接')
+
+            try:
+                old_id = int(raw.get('id'))
+            except (TypeError, ValueError):
+                old_id = 0
+
+            events.append({
+                'old_id': old_id,
+                'd': d, 'cat': cat, 'title': title, 'locs': locs,
+                'countries': [str(c) for c in (raw.get('countries') or []) if c],
+                'sum': str(raw.get('sum') or '').strip(),
+                'links': links,
+                'rel': [int(x) for x in (raw.get('rel') or [])
+                        if isinstance(x, int) or str(x).isdigit()],
+            })
+        except Exception:
+            dropped += 1
+
+    if not events:
+        raise ValueError(f'没有通过校验的事件（丢弃 {dropped} 条），保留旧数据')
+
+    # 重排为连续唯一 id，同时保留旧 id -> 新 id 映射，保证 rel 语义正确
+    for i, ev in enumerate(events, 1):
+        if ev['old_id'] > 0 and ev['old_id'] not in id_map:
+            id_map[ev['old_id']] = i
+        ev['id'] = i
+    valid_ids = {e['id'] for e in events}
+    for ev in events:
+        ev['rel'] = sorted({id_map[r] for r in ev['rel']
+                            if r in id_map and id_map[r] in valid_ids and id_map[r] != ev['id']})
+        ev.pop('old_id')
+
+    if dropped:
+        log(f'已丢弃 {dropped} 条不合规事件。')
+    return {'latestDate': target, 'events': events}
 
 
 def write_outputs(data, target, is_current):
@@ -161,11 +235,15 @@ def write_outputs(data, target, is_current):
                f'  generatedAt: "{generated}",\n'
                '  events: ' + json.dumps(events, ensure_ascii=False, indent=2) + '\n};\n')
 
-    start = (datetime.strptime(target, '%Y-%m-%d') - timedelta(days=7)).strftime('%Y-%m-%d')
+    target_dt = datetime.strptime(target, '%Y-%m-%d')
+    start = (target_dt - timedelta(days=7)).strftime('%Y-%m-%d')
     # 每周数据独立保存，供页面按指定日期热切换
     data_dir = BASE / 'data'
     data_dir.mkdir(exist_ok=True)
-    (data_dir / f'news-{start}_{target}.js').write_text(payload, encoding='utf-8')
+    week_file = data_dir / f'news-{start}_{target}.js'
+    tmp = week_file.with_suffix('.tmp')
+    tmp.write_text(payload, encoding='utf-8')
+    tmp.replace(week_file)
     # 仅当前周更新主数据文件（latestDate 驱动页面自动更新）
     if is_current:
         tmp = DATA_FILE.with_suffix('.tmp')
@@ -178,13 +256,20 @@ def write_outputs(data, target, is_current):
     for ev in events:
         by_day.setdefault(ev['d'], []).append(ev)
     for day, items in by_day.items():
-        y, m, d = target.split('-')[0], *day.split('-')
-        lines = [f'# {y}-{m}-{d} 国际新闻\n']
+        month, dom = map(int, day.split('-'))
+        try:
+            day_dt = datetime(target_dt.year, month, dom)
+            if day_dt > target_dt:
+                day_dt = day_dt.replace(year=target_dt.year - 1)
+        except ValueError:
+            log(f'跳过非法日期 {day}。')
+            continue
+        lines = [f'# {day_dt:%Y-%m-%d} 国际新闻\n']
         for ev in items:
             lines.append(f"## {ev['title']}\n")
             lines.append(ev['sum'] + '\n')
             lines.append('来源：' + '、'.join(f"[{l['t']}]({l['u']})" for l in ev['links']) + '\n')
-        (week_dir / f'{y}-{m}-{d}.md').write_text('\n'.join(lines), encoding='utf-8')
+        (week_dir / f'{day_dt:%Y-%m-%d}.md').write_text('\n'.join(lines), encoding='utf-8')
     log(f'数据已写入 data/news-{start}_{target}.js 与 archive/{start}_{target}/')
 
 
@@ -196,7 +281,14 @@ def main():
 
     today = datetime.now(BJT).strftime('%Y-%m-%d')
     target = args.date or today
-    datetime.strptime(target, '%Y-%m-%d')
+    try:
+        datetime.strptime(target, '%Y-%m-%d')
+    except ValueError:
+        log(f'日期格式错误：{target}，应为 YYYY-MM-DD。')
+        return 2
+    if target > today:
+        log(f'不能检索未来日期：{target}（今天 {today}）。')
+        return 2
     is_current = (target == today)
 
     if not args.date:
@@ -210,7 +302,7 @@ def main():
     cfg = load_config()
     try:
         raw = call_llm(cfg, target)
-        data = validate(parse_json(raw))
+        data = normalize(parse_json(raw), target)
         write_outputs(data, target, is_current)
         log(f"更新完成：latestDate={data['latestDate']}，事件 {len(data['events'])} 条。")
         return 0

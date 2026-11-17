@@ -932,9 +932,12 @@ setInterval(updateClock, 1000);
 /* ================= 数据更新中心（自动检测 + 手动补跑） ================= */
 const NEWS_LATEST = window.NEWS_DATA.latestDate;
 let updating = false;
+let viewingDate = fmtDate(bjNow());
+let generating = false;
 const UPDATE_CMD = '请立即执行国际新闻更新：检索最近7天国际重大新闻，多信源核实后按日期归档到 archive/，并重写 news-data.js（保持现有字段格式），不要修改 world-news-map.html。';
 
 function dayDiffFromLatest(){
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(NEWS_LATEST || '')) return 0;
   const d = bjNow();
   const today = new Date(d.getFullYear(), d.getMonth(), d.getDate());
   const latest = new Date(NEWS_LATEST + 'T00:00:00');
@@ -968,10 +971,11 @@ function hotReloadData(onNewer, onSame, onError){
   const s = document.createElement('script');
   s.src = 'news-data.js?t=' + Date.now();
   s.onload = ()=>{
+    s.remove();
     if (window.NEWS_DATA.latestDate > NEWS_LATEST) onNewer();
     else onSame();
   };
-  s.onerror = onError;
+  s.onerror = ()=>{ s.remove(); onError(); };
   document.head.appendChild(s);
 }
 
@@ -1006,9 +1010,22 @@ function runUpdate(manual){
     }
   );
 }
-$('btnUpdate').onclick = ()=>runUpdate(true);
+$('btnUpdate').onclick = ()=>{
+  // 处于历史周视图时，先回到当前数据视图再检查更新
+  if (viewingDate !== fmtDate(bjNow())){
+    setBanner('已切回当前数据视图，正在检查更新…', 'working');
+    setTimeout(()=>location.reload(), 600);
+    return;
+  }
+  runUpdate(true);
+};
 
 function checkStale(){
+  // 历史周视图不参与过期检测，避免误报覆盖浏览状态
+  if (viewingDate !== fmtDate(bjNow())){
+    $('staleBadge').classList.add('hidden');
+    return;
+  }
   const diff = dayDiffFromLatest();
   if (diff >= 1) runUpdate(false);
   else $('staleBadge').classList.add('hidden');
@@ -1020,36 +1037,49 @@ setInterval(checkStale, 60000);
 function fmtDate(d){ return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; }
 function loadWeek(dateStr){
   const end = new Date(dateStr + 'T00:00:00');
+  if (isNaN(end.getTime())){ setBanner('日期无效。', 'error'); return; }
   const start = new Date(end);
   start.setDate(start.getDate() - 7);
   const s = fmtDate(start), e = fmtDate(end);
   setBanner(`正在加载 ${s} ~ ${e} 的新闻数据…`, 'working');
+
   const sc = document.createElement('script');
   sc.src = `data/news-${s}_${e}.js?t=` + Date.now();
-  sc.onload = () => {
-    if (window.NEWS_DATA && Array.isArray(window.NEWS_DATA.events)){
-      EVENTS.length = 0;
-      EVENTS.push(...window.NEWS_DATA.events);
-      day = 'all';
-      selId = null;
-      renderHighlight(null);
-      buildChips();
-      buildLegend();
-      buildStats();
-      rebuildDrawer();
-      fitWorld();
-      setBanner(`已切换到 ${s} ~ ${e}（${EVENTS.length} 条事件）`, 'ok');
-    }
+
+  const applyEvents = () => {
+    const list = (window.NEWS_DATA && Array.isArray(window.NEWS_DATA.events))
+      ? window.NEWS_DATA.events : [];
+    if (!list.length){ missing(); return; }
+    EVENTS.length = 0;
+    EVENTS.push(...list);
+    viewingDate = e;
+    day = 'all';
+    selId = null;
+    $('panel').classList.remove('open');
+    renderHighlight(null);
+    buildChips();
+    buildLegend();
+    buildStats();
+    rebuildDrawer();
+    fitWorld();
+    setBanner(e === fmtDate(bjNow())
+      ? `已切换到当前周 ${s} ~ ${e}（${EVENTS.length} 条事件）`
+      : `已切换到历史周 ${s} ~ ${e}（${EVENTS.length} 条事件）`, 'ok');
   };
-  sc.onerror = () => {
-    if (bridge){
+
+  const missing = () => {
+    if (bridge && !generating){
+      generating = true;
       window.__pendingWeek = dateStr;
       setBanner(`该周暂无数据，正在自动生成 ${s} ~ ${e}（检索需要一些时间，请稍候）…`, 'working');
       bridge.postMessage(JSON.stringify({action:'generateWeek', week:`${s}_${e}`, endDate:e}));
-    } else {
+    } else if (!bridge){
       setBanner(`该周暂无数据。可运行 python3 workflow/news_updater.py --date ${e} 生成。`, 'waiting');
     }
   };
+
+  sc.onload = () => { sc.remove(); applyEvents(); };
+  sc.onerror = () => { sc.remove(); missing(); };
   document.head.appendChild(sc);
 }
 $('datePicker').addEventListener('change', e => {
@@ -1073,11 +1103,16 @@ window.onManagerResult = function(out){
   // 自动生成工作流的状态回调
   if (out.type === 'generating') return;
   if (out.type === 'generated'){
+    generating = false;
+    const pending = window.__pendingWeek;
+    window.__pendingWeek = null;
     setBanner('该周数据已生成，正在加载…', 'ok');
-    if (window.__pendingWeek) loadWeek(window.__pendingWeek);
+    if (pending) loadWeek(pending);
     return;
   }
   if (out.type === 'error'){
+    generating = false;
+    window.__pendingWeek = null;
     setBanner('自动生成失败：' + (out.error || '未知错误'), 'error');
     return;
   }

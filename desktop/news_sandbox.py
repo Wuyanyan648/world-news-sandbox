@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import threading
+from datetime import datetime
 from pathlib import Path
 
 import gi
@@ -27,7 +28,10 @@ ARCHIVE_DIR = Path(BASE).parent / 'archive'
 
 
 class DataManager:
-    """通过 JS 桥接管理本地周数据（列表/删除），浏览器端无此能力。"""
+    """通过 JS 桥接管理本地周数据（列表/删除/生成），浏览器端无此能力。"""
+
+    def __init__(self):
+        self._generating = set()
 
     def list_weeks(self):
         weeks = []
@@ -63,6 +67,13 @@ class DataManager:
         """后台线程调用独立 workflow 生成指定周数据，完成后通过 JS 回调通知。"""
         if not re.fullmatch(r'\d{4}-\d{2}-\d{2}_\d{4}-\d{2}-\d{2}', week or ''):
             return {'type': 'error', 'ok': False, 'error': '非法周标识'}
+        try:
+            datetime.strptime(end_date, '%Y-%m-%d')
+        except (TypeError, ValueError):
+            return {'type': 'error', 'ok': False, 'error': '非法截止日期'}
+        if week in self._generating:
+            return {'type': 'generating', 'ok': True, 'week': week}
+        self._generating.add(week)
         updater = Path(BASE).parent / 'workflow' / 'news_updater.py'
 
         def run():
@@ -78,6 +89,8 @@ class DataManager:
                            'error': tail or 'workflow 执行失败（可能缺少 API key）'}
             except Exception as e:
                 out = {'type': 'error', 'ok': False, 'error': str(e)}
+            finally:
+                self._generating.discard(week)
             GLib.idle_add(lambda: self.view.run_javascript(
                 f'window.onManagerResult({json.dumps(out, ensure_ascii=False)})', None, None, None))
 
@@ -89,6 +102,8 @@ class NewsSandbox(Gtk.Application):
     def __init__(self):
         super().__init__(application_id='cn.news.sandbox')
         self.manager = DataManager()
+        self.view = None
+        self.win = None
         self.connect('activate', self.on_activate)
 
     def on_manager_message(self, ucm, result):
@@ -109,7 +124,12 @@ class NewsSandbox(Gtk.Application):
             f'window.onManagerResult({json.dumps(out, ensure_ascii=False)})', None, None, None)
 
     def on_activate(self, app):
+        # 已存在窗口时直接置前，避免重复激活产生多个窗口
+        if self.win is not None:
+            self.win.present()
+            return
         win = Gtk.ApplicationWindow(application=app, title='寰宇战情 · 世界新闻沙盘')
+        self.win = win
         win.set_default_size(1600, 1000)
         try:
             win.set_icon_from_file(ICON)
@@ -133,8 +153,10 @@ class NewsSandbox(Gtk.Application):
         win.show_all()
         win.present()
         if '--open-manager' in sys.argv:
-            self.view.connect('load-changed',
-                              lambda v, ev: v.run_javascript('openManager && openManager();', None, None, None))
+            def on_load_changed(v, ev):
+                if ev == WebKit2.LoadEvent.FINISHED:
+                    v.run_javascript('openManager && openManager();', None, None, None)
+            self.view.connect('load-changed', on_load_changed)
 
 
 def main():
