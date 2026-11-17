@@ -54,8 +54,14 @@ python3 -m http.server 8123
 
 ```bash
 # 配置 API（当前默认 Perplexity Sonar，自带联网搜索，单次调用即可）
-cp workflow/config.example.json workflow/config.json
-# 编辑 config.json 填入 api_key（可配置 base_url/model/proxy 切换其他模型）
+# 方式一：环境变量（推荐，不进任何文件）
+export NEWS_API_KEY="你的key"
+# 方式二：用户级私有配置 ~/.config/news-sandbox/config.json（600权限，不进git）
+# 方式三：直接运行脚本，交互式输入（不回显，可选保存为600私有配置）
+python3 workflow/news_updater.py
+
+# 项目内 workflow/config.json 也可放非敏感配置（base_url/model/proxy），
+# 该文件已被 .gitignore 排除，不会上传；key 请勿写入任何会被提交的文件。
 
 # 安装 systemd 用户定时器（每天 07:00 / 21:00，Persistent=true，关机错过开机自动补跑）
 bash workflow/install_timer.sh

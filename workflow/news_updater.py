@@ -57,8 +57,36 @@ def log(msg):
 
 def load_config():
     if not CONFIG_FILE.exists():
-        raise SystemExit(f'缺少配置文件 {CONFIG_FILE}，请复制 config.example.json 并填入 api_key')
+        return {}
     return json.loads(CONFIG_FILE.read_text(encoding='utf-8'))
+
+
+PRIVATE_CONFIG = Path.home() / '.config' / 'news-sandbox' / 'config.json'
+
+
+def get_api_key(cfg):
+    """按安全优先级读取 API key：环境变量 → 用户级私有配置 → 项目配置 → 交互式输入。"""
+    for var in ('NEWS_API_KEY', 'PERPLEXITY_API_KEY', 'MOONSHOT_API_KEY'):
+        if os.environ.get(var):
+            return os.environ[var]
+    if PRIVATE_CONFIG.exists():
+        key = json.loads(PRIVATE_CONFIG.read_text(encoding='utf-8')).get('api_key')
+        if key:
+            return key
+    key = cfg.get('api_key')
+    if key and not key.startswith('在此填入'):
+        return key
+    import getpass
+    key = getpass.getpass('请输入新闻 API key（输入不回显，默认不保存）：').strip()
+    if not key:
+        raise SystemExit('未提供 API key，更新中止。')
+    ans = input(f'是否保存到 {PRIVATE_CONFIG}（权限600，下次免输入）？[y/N] ').strip().lower()
+    if ans == 'y':
+        PRIVATE_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+        PRIVATE_CONFIG.write_text(json.dumps({'api_key': key}), encoding='utf-8')
+        PRIVATE_CONFIG.chmod(0o600)
+        log(f'API key 已保存到 {PRIVATE_CONFIG}（600 权限）。')
+    return key
 
 
 def current_latest():
@@ -80,7 +108,7 @@ def call_llm(cfg, today):
     req = urllib.request.Request(
         cfg.get('base_url', 'https://api.perplexity.ai/chat/completions'),
         data=json.dumps(payload).encode('utf-8'),
-        headers={'Content-Type': 'application/json', 'Authorization': f"Bearer {cfg['api_key']}"},
+        headers={'Content-Type': 'application/json', 'Authorization': f"Bearer {get_api_key(cfg)}"},
         method='POST',
     )
     proxy = cfg.get('proxy') or os.environ.get('https_proxy')

@@ -3,3 +3,6 @@ __pycache__/
 .screenshots/
 .trae-html-share-packages/
 .DS_Store
+workflow/config.json
+workflow/updater.log
+workflow/*.tmp
