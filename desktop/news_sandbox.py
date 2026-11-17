@@ -74,6 +74,8 @@ class DataManager:
     def delete_week(self, week):
         if not re.fullmatch(r'\d{4}-\d{2}-\d{2}_\d{4}-\d{2}-\d{2}', week or ''):
             return {'ok': False, 'error': '非法周标识'}
+        if week in self._generating:
+            return {'ok': False, 'error': '该周正在生成，请稍后再删除'}
         removed = []
         f = DATA_DIR / f'news-{week}.js'
         if f.exists():

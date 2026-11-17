@@ -5,6 +5,7 @@
 否则调用带联网搜索的 LLM API 检索近一周国际新闻，结构化校验后原子写入
 news-data.js 与 archive/ 归档。由 systemd --user timer（Persistent=true）调度。
 """
+import fcntl
 import json
 import os
 import re
@@ -23,6 +24,7 @@ DATA_FILE = BASE / 'news-data.js'
 ARCHIVE_DIR = BASE / 'archive'
 LOG_FILE = BASE / 'workflow' / 'updater.log'
 CONFIG_FILE = BASE / 'workflow' / 'config.json'
+LOCK_FILE = BASE / 'workflow' / '.lock'
 BJT = timezone(timedelta(hours=8))
 
 CATS = {'war', 'diplomacy', 'economy', 'tech', 'climate', 'politics', 'disaster'}
@@ -62,6 +64,12 @@ def log(msg):
     line = f"[{datetime.now(BJT).isoformat(timespec='seconds')}] {msg}"
     print(line, flush=True)
     LOG_FILE.parent.mkdir(exist_ok=True)
+    try:
+        if LOG_FILE.exists() and LOG_FILE.stat().st_size > 2 * 1024 * 1024:
+            tail = LOG_FILE.read_text(encoding='utf-8')[-500_000:]
+            LOG_FILE.write_text(tail, encoding='utf-8')
+    except OSError:
+        pass
     with LOG_FILE.open('a', encoding='utf-8') as f:
         f.write(line + '\n')
 
@@ -124,7 +132,9 @@ def call_llm(cfg, today, leads=''):
         payload['tools'] = [{'type': 'deepseek_web_search', 'name': 'deepseek_web_search'}]
         payload['thinking'] = {'type': 'disabled'}
 
-    proxy = cfg.get('proxy') or os.environ.get('https_proxy')
+    # API 默认直连：只有显式配置 api_proxy 时才走代理。
+    # 不能复用 feeds 的代理，否则国内可直连的 API 会因代理未启动而全部失败。
+    proxy = cfg.get('api_proxy') or ''
     handlers = []
     if proxy:
         handlers.append(urllib.request.ProxyHandler({'http': proxy, 'https': proxy}))
@@ -289,6 +299,15 @@ def main():
     parser = argparse.ArgumentParser(description='国际新闻独立更新 workflow')
     parser.add_argument('--date', help='指定截止日期 YYYY-MM-DD，检索该日期及其前7天的新闻（用于历史数据或测试）')
     args = parser.parse_args()
+
+    # 单实例锁：避免定时任务与手动/界面触发同时运行，造成重复计费与写冲突
+    LOCK_FILE.parent.mkdir(exist_ok=True)
+    lock_handle = LOCK_FILE.open('w')
+    try:
+        fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        log('已有更新任务在运行，本次跳过。')
+        return 0
 
     today = datetime.now(BJT).strftime('%Y-%m-%d')
     target = args.date or today

@@ -981,6 +981,8 @@ const NEWS_LATEST = window.NEWS_DATA.latestDate;
 let updating = false;
 let viewingDate = fmtDate(bjNow());
 let generating = false;
+let lastAutoAttempt = 0;
+const AUTO_COOLDOWN = 30 * 60 * 1000;   // 自动更新失败后 30 分钟内不重复尝试
 
 function dayDiffFromLatest(){
   if (!/^\d{4}-\d{2}-\d{2}$/.test(NEWS_LATEST || '')) return 0;
@@ -1013,10 +1015,6 @@ function hotReloadData(onNewer, onSame, onError){
 function runUpdate(manual){
   if (updating) return;
   const diff = dayDiffFromLatest();
-  if (manual && diff < 1){
-    setBanner(`当前已是最新数据（截至 ${NEWS_LATEST}），无需更新。`, 'ok');
-    return;
-  }
   updating = true;
   $('staleBadge').classList.remove('hidden');
   setBanner(manual ? '正在检查数据源是否有新数据…'
@@ -1030,6 +1028,8 @@ function runUpdate(manual){
       // 数据源未更新：直接由桌面应用调用 workflow 生成当前周
       if (bridge && !generating){
         generating = true;
+        updating = false;
+        lastAutoAttempt = Date.now();
         window.__pendingWeek = fmtDate(bjNow());
         window.__pendingCurrent = true;
         setBanner('数据源暂无更新，正在调用本地 workflow 检索最新新闻…', 'working');
@@ -1049,6 +1049,7 @@ function runUpdate(manual){
     }
   );
 }
+let lastManualAttempt = 0;
 $('btnUpdate').onclick = ()=>{
   // 处于历史周视图时，先回到当前数据视图再检查更新
   if (viewingDate !== fmtDate(bjNow())){
@@ -1056,6 +1057,12 @@ $('btnUpdate').onclick = ()=>{
     setTimeout(()=>location.reload(), 600);
     return;
   }
+  // 手动检查允许强制刷新（即使今天已更新），但 10 分钟内不重复触发，避免误点产生费用
+  if (Date.now() - lastManualAttempt < 10 * 60 * 1000){
+    setBanner('刚刚已检查过；如需再次强制刷新，请 10 分钟后再试。', 'waiting');
+    return;
+  }
+  lastManualAttempt = Date.now();
   runUpdate(true);
 };
 
@@ -1066,8 +1073,8 @@ function checkStale(){
     return;
   }
   const diff = dayDiffFromLatest();
-  if (diff >= 1) runUpdate(false);
-  else $('staleBadge').classList.add('hidden');
+  if (diff >= 1 && !updating && !generating && Date.now() - lastAutoAttempt > AUTO_COOLDOWN) runUpdate(false);
+  else if (diff < 1) $('staleBadge').classList.add('hidden');
 }
 checkStale();
 setInterval(checkStale, 60000);
@@ -1155,6 +1162,7 @@ function startProbe(dateStr){
     if (++probeTries > 30){
       stopProbe();
       generating = false;
+      updating = false;
       setBanner('自动生成超时，请检查 workflow/updater.log 或稍后重试。', 'error');
       return;
     }

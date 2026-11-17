@@ -8,9 +8,11 @@ import html
 import json
 import os
 import re
+import socket
 import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlparse
 
 BJT = timezone(timedelta(hours=8))
 ATOM = {'a': 'http://www.w3.org/2005/Atom'}
@@ -89,6 +91,13 @@ def fetch_feeds(cfg, since_date, log):
     if not feeds.get('enabled'):
         return []
     proxy = _proxy(cfg)
+    if proxy:
+        p = urlparse(proxy)
+        try:
+            socket.create_connection((p.hostname or '127.0.0.1', p.port or 7897), timeout=1).close()
+        except OSError:
+            log('代理不可用，本轮跳过所有外部情报源。')
+            return []
     ttl_days = int(feeds.get('ttl_days') or DEFAULT_TTL_DAYS)
     per_source = int(feeds.get('per_source') or 6)
     since = datetime.strptime(since_date, '%Y-%m-%d').replace(tzinfo=BJT) - timedelta(days=ttl_days)

@@ -2,9 +2,10 @@
   "provider": "deepseek",
   "model": "deepseek-flash",
   "base_url": "https://api.deepseek.com/chat/completions",
-  "proxy": "http://127.0.0.1:7897",
+  "api_proxy": "",
   "feeds": {
     "enabled": true,
+    "proxy": "http://127.0.0.1:7897",
     "ttl_days": 7,
     "per_source": 6,
     "youtube_channels": [
