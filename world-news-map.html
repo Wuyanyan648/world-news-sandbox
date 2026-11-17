@@ -934,7 +934,6 @@ const NEWS_LATEST = window.NEWS_DATA.latestDate;
 let updating = false;
 let viewingDate = fmtDate(bjNow());
 let generating = false;
-const UPDATE_CMD = '请立即执行国际新闻更新：检索最近7天国际重大新闻，多信源核实后按日期归档到 archive/，并重写 news-data.js（保持现有字段格式），不要修改 world-news-map.html。';
 
 function dayDiffFromLatest(){
   if (!/^\d{4}-\d{2}-\d{2}$/.test(NEWS_LATEST || '')) return 0;
@@ -951,21 +950,6 @@ function setBanner(msg, state){
 }
 function hideBanner(){ $('updateBanner').classList.add('hidden'); }
 $('ubClose').onclick = hideBanner;
-
-function copyText(text){
-  if (navigator.clipboard && navigator.clipboard.writeText){
-    navigator.clipboard.writeText(text).catch(()=>fallbackCopy(text));
-  } else fallbackCopy(text);
-}
-function fallbackCopy(text){
-  const ta = document.createElement('textarea');
-  ta.value = text;
-  ta.style.position = 'fixed'; ta.style.opacity = '0';
-  document.body.appendChild(ta);
-  ta.select();
-  try{ document.execCommand('copy'); }catch(e){}
-  ta.remove();
-}
 
 function hotReloadData(onNewer, onSame, onError){
   const s = document.createElement('script');
@@ -996,12 +980,20 @@ function runUpdate(manual){
       setTimeout(()=>location.reload(), 900);
     },
     ()=>{
-      updating = false;
-      if (manual){
-        copyText(UPDATE_CMD);
-        setBanner('数据源暂无更新。更新指令已复制，粘贴给 TRAE 即开始检索；完成后本页自动刷新。', 'waiting');
+      // 数据源未更新：直接由桌面应用调用 workflow 生成当前周
+      if (bridge && !generating){
+        generating = true;
+        window.__pendingWeek = fmtDate(bjNow());
+        window.__pendingCurrent = true;
+        setBanner('数据源暂无更新，正在调用本地 workflow 检索最新新闻…', 'working');
+        bridge.postMessage(JSON.stringify({
+          action:'generateWeek',
+          week: `${fmtDate(new Date(Date.now() - 7*864e5))}_${fmtDate(bjNow())}`,
+          endDate: fmtDate(bjNow())
+        }));
       } else {
-        setBanner(`数据源尚未更新（仍截至 ${NEWS_LATEST}），每日任务生成新数据后将自动加载。`, 'waiting');
+        updating = false;
+        setBanner('数据源未更新，且当前未在桌面应用中运行，无法自动生成。', 'waiting');
       }
     },
     ()=>{
@@ -1071,10 +1063,11 @@ function loadWeek(dateStr){
     if (bridge && !generating){
       generating = true;
       window.__pendingWeek = dateStr;
+      window.__pendingCurrent = false;
       setBanner(`该周暂无数据，正在自动生成 ${s} ~ ${e}（检索需要一些时间，请稍候）…`, 'working');
       bridge.postMessage(JSON.stringify({action:'generateWeek', week:`${s}_${e}`, endDate:e}));
     } else if (!bridge){
-      setBanner(`该周暂无数据。可运行 python3 workflow/news_updater.py --date ${e} 生成。`, 'waiting');
+      setBanner('该周暂无数据，请通过桌面应用启动以自动生成。', 'waiting');
     }
   };
 
@@ -1104,15 +1097,26 @@ window.onManagerResult = function(out){
   if (out.type === 'generating') return;
   if (out.type === 'generated'){
     generating = false;
+    updating = false;
     const pending = window.__pendingWeek;
+    const wasCurrent = window.__pendingCurrent;
     window.__pendingWeek = null;
+    window.__pendingCurrent = false;
+    if (wasCurrent){
+      setBanner('最新数据已生成，正在刷新地图…', 'ok');
+      setTimeout(()=>location.reload(), 800);
+      return;
+    }
     setBanner('该周数据已生成，正在加载…', 'ok');
     if (pending) loadWeek(pending);
     return;
   }
   if (out.type === 'error'){
     generating = false;
+    updating = false;
     window.__pendingWeek = null;
+    window.__pendingCurrent = false;
+    $('staleBadge').classList.toggle('hidden', dayDiffFromLatest() < 1);
     setBanner('自动生成失败：' + (out.error || '未知错误'), 'error');
     return;
   }
