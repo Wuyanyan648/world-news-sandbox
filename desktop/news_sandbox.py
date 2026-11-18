@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import traceback
 from datetime import datetime
 from pathlib import Path
 
@@ -29,6 +30,18 @@ HTML = os.path.join(BASE, '..', 'world-news-map.html')
 APP_ID = 'cn.news.sandbox'
 DATA_DIR = Path(BASE).parent / 'data'
 ARCHIVE_DIR = Path(BASE).parent / 'archive'
+LOG_DIR = Path.home() / '.cache' / 'world-news-sandbox'
+LOG_FILE = LOG_DIR / 'app.log'
+
+
+def log(msg):
+    """把启动/异常写入日志，方便桌面图标启动失败时排查。"""
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        with LOG_FILE.open('a', encoding='utf-8') as f:
+            f.write(f'[{datetime.now():%Y-%m-%d %H:%M:%S}] {msg}\n')
+    except Exception:
+        pass
 
 
 def setup_identity():
@@ -128,10 +141,29 @@ class NewsSandbox(Gtk.Application):
         self.connect('activate', self.on_activate)
 
     def hide_splash(self):
+        if getattr(self, 'splash_failed', False):
+            return False
         if self.splash is not None:
+            log('hide splash (page ready)')
             self.splash.set_visible(False)
             self.splash = None
         return False
+
+    def show_splash_error(self, text):
+        """页面加载/渲染失败时，把原生启动画面变成错误提示，而不是黑屏。"""
+        log('ERROR: ' + text)
+        self.splash_failed = True
+        if getattr(self, 'splash_sub', None) is not None:
+            self.splash_sub.set_text(text)
+            self.splash_sub.remove_css_class('splash-sub')
+            self.splash_sub.add_css_class('splash-error')
+
+    def on_load_failed(self, view, event, uri, error):
+        self.show_splash_error('页面加载失败，请查看日志：' + str(error))
+        return True
+
+    def on_web_crash(self, view, reason):
+        self.show_splash_error('页面渲染进程异常退出，请重启应用')
 
     def on_manager_message(self, ucm, value):
         try:
@@ -139,6 +171,7 @@ class NewsSandbox(Gtk.Application):
             action = req.get('action')
             if action == 'ready':
                 # 页面底图已经显示，撤掉原生启动画面
+                log('page ready message received')
                 GLib.idle_add(self.hide_splash)
                 return
             if action == 'list':
@@ -158,8 +191,11 @@ class NewsSandbox(Gtk.Application):
     def on_activate(self, app):
         # 已存在窗口时直接置前，避免重复激活产生多个窗口
         if self.win is not None:
+            log('re-activate existing window')
+            self.win.unminimize()
             self.win.present()
             return
+        log('creating main window')
         win = Gtk.ApplicationWindow(application=app, title='寰宇战情 · 世界新闻沙盘')
         self.win = win
         win.set_default_size(1600, 1000)
@@ -185,6 +221,8 @@ class NewsSandbox(Gtk.Application):
           letter-spacing: 14px; color: #e3c47a; }
         .splash-sub { font-family: Georgia, "Songti SC", serif; font-size: 12px;
           letter-spacing: 5px; color: #9a947e; }
+        .splash-error { font-family: Georgia, "Songti SC", serif; font-size: 12px;
+          letter-spacing: 2px; color: #e6b1a4; }
         """)
         Gtk.StyleContext.add_provider_for_display(
             win.get_display(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
@@ -208,11 +246,17 @@ class NewsSandbox(Gtk.Application):
         box.append(sub)
         splash.set_center_widget(box)
         self.splash = splash
+        self.splash_sub = sub
 
         overlay = Gtk.Overlay()
         overlay.set_child(self.view)
         overlay.add_overlay(splash)
         win.set_child(overlay)
+        self.view.connect('load-failed', self.on_load_failed)
+        try:
+            self.view.connect('web-process-terminated', self.on_web_crash)
+        except Exception:
+            pass
         self.view.load_uri('file://' + HTML)
 
         win.present()
@@ -227,11 +271,16 @@ class NewsSandbox(Gtk.Application):
 
 
 def main():
-    if not os.path.exists(HTML):
-        raise SystemExit(f'未找到地图文件: {HTML}')
-    setup_identity()
-    app = NewsSandbox()
-    app.run(None)
+    try:
+        if not os.path.exists(HTML):
+            raise SystemExit(f'未找到地图文件: {HTML}')
+        log(f'launch python={sys.executable} html={HTML}')
+        setup_identity()
+        app = NewsSandbox()
+        app.run(None)
+    except Exception:
+        log('FATAL\n' + traceback.format_exc())
+        raise
 
 
 if __name__ == '__main__':
