@@ -11,4 +11,4 @@ Terminal=false
 Categories=News;Education;
 Keywords=news;world;map;sandbox;
 StartupNotify=true
-StartupWMClass=WorldNewsSandbox
+StartupWMClass=world-news-sandbox

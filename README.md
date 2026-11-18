@@ -25,7 +25,7 @@
 python3 desktop/news_sandbox.py
 ```
 
-依赖：`python3-gi` 与 `gir1.2-webkit2-4.1`（Ubuntu 可 `sudo apt install gir1.2-webkit2-4.1 python3-gi`）。已内置 X11 后端，Wayland 桌面下同样可用。
+依赖：`python3-gi`、`gir1.2-gtk-4.0` 与 `gir1.2-webkit-6.0`（Ubuntu 可 `sudo apt install gir1.2-gtk-4.0 gir1.2-webkit-6.0 python3-gi`）。桌面壳使用 GTK4 / WebKitGTK 6.0，并强制启用 DMABUF 渲染走 GPU 合成（NVIDIA 专有驱动下 GTK3 版 WebKit 会静默退回纯软件渲染）。
 
 系统应用菜单中也可搜索「国际新闻沙盘」启动（已附带 `.desktop` 启动器与图标）。
 
@@ -96,7 +96,7 @@ python3 workflow/news_updater.py --date 2026-11-15
 ## 技术说明
 
 - 前端：原生 HTML/Canvas（无框架、无构建），自包含离线可用。
-- 桌面壳：Python + PyGObject + WebKitGTK 4.1。
+- 桌面壳：Python + PyGObject + GTK4 + WebKitGTK 6.0（DMABUF/GPU 合成）。
 - 地图数据：Natural Earth 50m（world-atlas TopoJSON 解码为 GeoJSON 内嵌）。
 - 新闻来源：新华社/人民网/央视、TASS、ISW、联合国、Reuters 等公开报道，重要事件多信源交叉核实，单一来源消息标注"未获独立证实"。
 

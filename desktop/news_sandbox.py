@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-"""寰宇战情 · 世界新闻沙盘 — Linux 桌面应用（WebKitGTK 壳）"""
+"""寰宇战情 · 世界新闻沙盘 — Linux 桌面应用（GTK4 / WebKitGTK 6.0 壳）"""
 import os
 
 # 强制 X11 后端，保证在 Wayland 桌面下窗口也能正常显示
 os.environ.setdefault('GDK_BACKEND', 'x11')
+# GTK3 / WebKitGTK 4.1 的 DMABUF 渲染器在 NVIDIA + X11 下无法创建 GBM buffer，
+# WebKit 会静默退回纯软件渲染；GTK4 / WebKit 6.0 的 DMABUF 路径可用，
+# 强制开启后由 GPU 完成合成（实测拖拽/缩放稳定 60fps）。
+os.environ.setdefault('WEBKIT_FORCE_DMABUF_RENDERER', '1')
 
 import json
 import re
@@ -16,34 +20,21 @@ from pathlib import Path
 
 import gi
 
-gi.require_version('Gtk', '3.0')
-gi.require_version('WebKit2', '4.1')
-gi.require_version('Gdk', '3.0')
-from gi.repository import Gtk, WebKit2, GLib, Gdk
+gi.require_version('Gtk', '4.0')
+gi.require_version('WebKit', '6.0')
+from gi.repository import Gtk, WebKit, GLib
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 HTML = os.path.join(BASE, '..', 'world-news-map.html')
-ICON = os.path.join(BASE, 'icon.svg')
-ICON_NAME = 'world-news-sandbox'
 APP_ID = 'cn.news.sandbox'
-WM_CLASS = 'WorldNewsSandbox'
 DATA_DIR = Path(BASE).parent / 'data'
 ARCHIVE_DIR = Path(BASE).parent / 'archive'
 
 
 def setup_identity():
-    """设置程序名与 WM_CLASS，使桌面环境能把窗口匹配到 .desktop（图标/名称正确）。"""
+    """设置程序名，使桌面环境能把窗口匹配到 .desktop（图标/名称正确）。"""
     GLib.set_prgname('world-news-sandbox')
     GLib.set_application_name('国际新闻沙盘')
-    try:
-        Gdk.set_program_class(WM_CLASS)
-    except Exception:
-        pass
-    # 图标优先使用已安装到图标主题的同名图标，缺失时回退到本地 SVG
-    try:
-        Gtk.Window.set_default_icon_from_file(ICON)
-    except Exception:
-        pass
 
 
 class DataManager:
@@ -119,8 +110,9 @@ class DataManager:
                 out = {'type': 'error', 'ok': False, 'error': str(e)}
             finally:
                 self._generating.discard(week)
-            GLib.idle_add(lambda: self.view.run_javascript(
-                f'window.onManagerResult({json.dumps(out, ensure_ascii=False)})', None, None, None))
+            GLib.idle_add(lambda: self.view.evaluate_javascript(
+                f'window.onManagerResult({json.dumps(out, ensure_ascii=False)})',
+                -1, None, None, None, None, None))
 
         threading.Thread(target=run, daemon=True).start()
         return {'type': 'generating', 'ok': True, 'week': week}
@@ -134,9 +126,9 @@ class NewsSandbox(Gtk.Application):
         self.win = None
         self.connect('activate', self.on_activate)
 
-    def on_manager_message(self, ucm, result):
+    def on_manager_message(self, ucm, value):
         try:
-            req = json.loads(result.get_js_value().to_string())
+            req = json.loads(value.to_string())
             action = req.get('action')
             if action == 'list':
                 out = self.manager.list_weeks()
@@ -148,8 +140,9 @@ class NewsSandbox(Gtk.Application):
                 out = {'ok': False, 'error': '未知操作'}
         except Exception as e:
             out = {'ok': False, 'error': str(e)}
-        self.view.run_javascript(
-            f'window.onManagerResult({json.dumps(out, ensure_ascii=False)})', None, None, None)
+        self.view.evaluate_javascript(
+            f'window.onManagerResult({json.dumps(out, ensure_ascii=False)})',
+            -1, None, None, None, None, None)
 
     def on_activate(self, app):
         # 已存在窗口时直接置前，避免重复激活产生多个窗口
@@ -159,34 +152,27 @@ class NewsSandbox(Gtk.Application):
         win = Gtk.ApplicationWindow(application=app, title='寰宇战情 · 世界新闻沙盘')
         self.win = win
         win.set_default_size(1600, 1000)
-        win.set_icon_name(ICON_NAME)
-        try:
-            win.set_icon_from_file(ICON)
-        except Exception:
-            pass
-        win.set_title('寰宇战情 · 世界新闻沙盘')
         win.maximize()
 
-        settings = WebKit2.Settings()
+        settings = WebKit.Settings()
         settings.set_property('enable-javascript', True)
         settings.set_property('allow-file-access-from-file-urls', True)
         settings.set_property('enable-webgl', True)
 
-        self.view = WebKit2.WebView(settings=settings)
+        self.view = WebKit.WebView(settings=settings)
         self.manager.view = self.view          # 生成完成回调需要用它推消息给页面
         ucm = self.view.get_user_content_manager()
         ucm.register_script_message_handler('newsManager')
         ucm.connect('script-message-received', self.on_manager_message)
+        win.set_child(self.view)
         self.view.load_uri('file://' + HTML)
-        win.add(self.view)
 
-        win.connect('destroy', lambda *_: app.quit())
-        win.show_all()
         win.present()
         if '--open-manager' in sys.argv:
             def on_load_changed(v, ev):
-                if ev == WebKit2.LoadEvent.FINISHED:
-                    v.run_javascript('openManager && openManager();', None, None, None)
+                if ev == WebKit.LoadEvent.FINISHED:
+                    v.evaluate_javascript('openManager && openManager();',
+                                          -1, None, None, None, None, None)
             self.view.connect('load-changed', on_load_changed)
 
 

@@ -441,22 +441,16 @@ const ctx = canvas.getContext('2d');
 const fogCanvas = document.getElementById('fog');
 const fctx = fogCanvas.getContext('2d');
 let vw=0, vh=0, dpr=1;
+const MAX_CANVAS_DPR = 2;   // GPU 合成下按屏幕原生分辨率绘制
 
 const cam = {ox:0, oy:0, z:1};
-// 5K 屏上按 2x 绘制主画布只会徒增光栅化成本，1.5x 已足够清晰
-const MAX_CANVAS_DPR = 1.5;
 let bakedZ = 1;           // 底图 CSS 尺寸对应的缩放
-let zoomPreview = false;  // 滚轮/飞行期间用 transform 预览缩放，结束后再固化尺寸
-let moving = false;       // 拖拽中：隐藏重绘层，只让合成器平移底图
 let lastLayerW = -1, lastLayerTr = '';
 
 function applyCam(){
   if (!vw || !vh) return;
   const w = Math.round(MAPW*bakedZ), h = Math.round(MAPH*bakedZ);
-  const k = cam.z / bakedZ;
-  const tr = (zoomPreview && Math.abs(k-1) > 0.0005)
-    ? `translate(${cam.ox.toFixed(2)}px,${cam.oy.toFixed(2)}px) scale(${k.toFixed(5)})`
-    : `translate(${cam.ox.toFixed(2)}px,${cam.oy.toFixed(2)}px)`;
+  const tr = `translate(${cam.ox.toFixed(2)}px,${cam.oy.toFixed(2)}px)`;
   if (w !== lastLayerW){
     lastLayerW = w;
     base.style.width = w+'px'; base.style.height = h+'px';
@@ -469,19 +463,7 @@ function applyCam(){
   }
 }
 function syncHL(){
-  hl.style.display = (selId && !moving && !zoomPreview) ? '' : 'none';
-}
-function enterMotion(){
-  moving = true;
-  canvas.style.opacity = '0';       // 保留元素以便继续接收指针事件
-  vig.style.display = 'none';
-  syncHL();
-}
-function leaveMotion(){
-  moving = false;
-  vig.style.display = '';
-  syncHL();
-  requestScene();
+  hl.style.display = selId ? '' : 'none';
 }
 function resize(){
   dpr = Math.min(window.devicePixelRatio || 1, MAX_CANVAS_DPR);
@@ -498,8 +480,9 @@ function resize(){
   else if (atFit){ fitWorld(); }            // 处于全局视角时，窗口变化后重新铺满
   else {
     cam.z = Math.max(cam.z, minZoom());     // 防止窗口变大后地图缩成一小块
-    if (!zoomPreview) bakedZ = cam.z;
     clampCam();
+    bakedZ = cam.z;
+    lastLayerW = -1;
     applyCam();
     requestScene();
   }
@@ -520,7 +503,6 @@ function fitWorld(){
   cam.z = s; cam.ox = (vw-MAPW*s)/2; cam.oy = (vh-MAPH*s)/2;
   atFit = true;
   cancelAnim();
-  zoomPreview = false;
   bakedZ = s;
   lastLayerW = -1;
   applyCam();
@@ -553,30 +535,7 @@ const evById = id => EVENTS.find(e=>e.id===id);
 
 /* ================= 飞行相机 ================= */
 let flyId = 0;
-let zoomTimer = null;
-function beginZoomPreview(){
-  if (zoomPreview) return;
-  zoomPreview = true;
-  canvas.style.opacity = '0';
-  vig.style.display = 'none';
-  syncHL();
-}
-function commitZoom(){
-  if (zoomTimer){ clearTimeout(zoomTimer); zoomTimer = null; }
-  if (!zoomPreview) return;
-  zoomPreview = false;
-  bakedZ = cam.z;
-  lastLayerW = -1;
-  applyCam();
-  vig.style.display = moving ? 'none' : '';
-  syncHL();
-  requestScene();
-}
-function cancelAnim(){
-  flyId++;
-  if (zoomTimer){ clearTimeout(zoomTimer); zoomTimer = null; }
-  if (zoomPreview) commitZoom();
-}
+function cancelAnim(){ flyId++; }
 function flyToEvent(ev){
   const pts = ev.locs.map(l=>P(l.lng,l.lat));
   let x0=Infinity,x1=-Infinity,y0=Infinity,y1=-Infinity;
@@ -589,7 +548,6 @@ function flyToEvent(ev){
   const from = {ox:cam.ox, oy:cam.oy, z:cam.z};
   const to = {ox:vw/2-cx*z, oy:vh/2-cy*z, z};
   const t0 = performance.now(), dur = 900;
-  beginZoomPreview();
   function step(now){
     if (id !== flyId) return;
     const k = Math.min(1, (now-t0)/dur), e = easeInOutCubic(k);
@@ -597,8 +555,11 @@ function flyToEvent(ev){
     cam.oy = lerp(from.oy, to.oy, e);
     cam.z  = lerp(from.z,  to.z,  e);
     clampCam();
+    bakedZ = cam.z;
+    lastLayerW = -1;
     applyCam();
-    if (k < 1) requestAnimationFrame(step); else commitZoom();
+    drawScene();
+    if (k < 1) requestAnimationFrame(step);
   }
   requestAnimationFrame(step);
 }
@@ -611,7 +572,7 @@ for(let i=0;i<70;i++){
     ph:Math.random()*7, a:0.12+Math.random()*0.3});
 }
 
-/* ================= 按需渲染（静止时不重绘，拖拽/缩放时只移动底图） ================= */
+/* ================= 按需渲染（静止时不重绘；交互时随相机重绘） ================= */
 let scenePending = false;
 function requestScene(){
   if (scenePending) return;
@@ -620,8 +581,6 @@ function requestScene(){
 }
 function drawScene(){
   if (!vw || !vh) return;
-  if (moving || zoomPreview){ canvas.style.opacity = '0'; return; }
-  canvas.style.opacity = '1';
   draw();
 }
 function draw(){
@@ -771,7 +730,6 @@ canvas.addEventListener('pointerdown', e=>{
   if (e.button !== 0) return;
   cancelAnim();
   drag = {x:e.clientX, y:e.clientY, moved:false};
-  enterMotion();
   canvas.classList.add('dragging');
   hideTooltip();
   hoverEv = null; hoverCountry = null;
@@ -785,7 +743,8 @@ function onDragMove(e){
   cam.ox += dx; cam.oy += dy;
   drag.x = e.clientX; drag.y = e.clientY;
   clampCam();
-  applyCam();          // 拖拽期间只平移图片层，不重绘 canvas
+  applyCam();
+  requestScene();      // 节点随地图一起移动（GPU 合成下稳定 60fps）
 }
 function onDragEnd(e){
   if (!drag) return;
@@ -794,7 +753,7 @@ function onDragEnd(e){
   canvas.classList.remove('dragging');
   window.removeEventListener('pointermove', onDragMove);
   window.removeEventListener('pointerup', onDragEnd);
-  leaveMotion();
+  drawScene();
   if (!wasDrag){
     const hit = hitTest(e.clientX, e.clientY);
     if (hit) selectEvent(hit.ev.id, false); else deselect();
@@ -828,7 +787,6 @@ canvas.addEventListener('pointerleave', ()=>{
 canvas.addEventListener('wheel', e=>{
   e.preventDefault();
   cancelAnim();
-  beginZoomPreview();
   const factor = Math.exp(-e.deltaY*0.0012);
   const [mx,my] = [e.clientX, e.clientY];
   const [gx,gy] = s2m(mx,my);
@@ -836,9 +794,9 @@ canvas.addEventListener('wheel', e=>{
   atFit = cam.z <= minZoom() * 1.001;
   cam.ox = mx - gx*cam.z; cam.oy = my - gy*cam.z;
   clampCam();
-  applyCam();          // 缩放期间用 transform 预览，松手后再固化尺寸并重绘
-  if (zoomTimer) clearTimeout(zoomTimer);
-  zoomTimer = setTimeout(commitZoom, 180);
+  bakedZ = cam.z; lastLayerW = -1;
+  applyCam();
+  requestScene();
 }, {passive:false});
 canvas.addEventListener('dblclick', e=>{
   cancelAnim();
