@@ -158,6 +158,24 @@ class NewsSandbox(Gtk.Application):
             self.splash_sub.remove_css_class('splash-sub')
             self.splash_sub.add_css_class('splash-error')
 
+    def maximize_once(self):
+        if self.win is not None:
+            self.win.maximize()
+            log(f'maximize requested (mapped={self.win.get_mapped()})')
+        return False
+
+    def check_mapped(self):
+        if self.win is not None and not self.win.get_mapped():
+            log('window still unmapped after 2s, re-presenting')
+            self.win.present()
+        return False
+
+    def splash_timeout(self):
+        if self.splash is not None and not getattr(self, 'splash_failed', False):
+            self.show_splash_error(
+                '页面加载超时，请重启应用（日志：~/.cache/world-news-sandbox/app.log）')
+        return False
+
     def on_load_failed(self, view, event, uri, error):
         self.show_splash_error('页面加载失败，请查看日志：' + str(error))
         return True
@@ -199,7 +217,6 @@ class NewsSandbox(Gtk.Application):
         win = Gtk.ApplicationWindow(application=app, title='寰宇战情 · 世界新闻沙盘')
         self.win = win
         win.set_default_size(1600, 1000)
-        win.maximize()
 
         settings = WebKit.Settings()
         settings.set_property('enable-javascript', True)
@@ -207,6 +224,7 @@ class NewsSandbox(Gtk.Application):
         settings.set_property('enable-webgl', True)
 
         self.view = WebKit.WebView(settings=settings)
+        log('webview created')
         self.manager.view = self.view          # 生成完成回调需要用它推消息给页面
         ucm = self.view.get_user_content_manager()
         ucm.register_script_message_handler('newsManager')
@@ -252,6 +270,7 @@ class NewsSandbox(Gtk.Application):
         overlay.set_child(self.view)
         overlay.add_overlay(splash)
         win.set_child(overlay)
+        log('splash + overlay ready')
         self.view.connect('load-failed', self.on_load_failed)
         try:
             self.view.connect('web-process-terminated', self.on_web_crash)
@@ -260,8 +279,13 @@ class NewsSandbox(Gtk.Application):
         self.view.load_uri('file://' + HTML)
 
         win.present()
-        # 兜底：页面 ready 消息丢失时也要撤掉启动画面
-        GLib.timeout_add_seconds(7, self.hide_splash)
+        log('window presented')
+        # 先映射再最大化：GTK4 + Mutter 下，映射前 maximize 偶尔会让窗口
+        # 停在“需要 allocation”的状态，表现为光标转圈但没有窗口。
+        GLib.timeout_add(80, self.maximize_once)
+        GLib.timeout_add(2000, self.check_mapped)
+        # 兜底：7 秒还没 ready 就不要静默黑屏，直接在启动画面上报错
+        GLib.timeout_add_seconds(7, self.splash_timeout)
         if '--open-manager' in sys.argv:
             def on_load_changed(v, ev):
                 if ev == WebKit.LoadEvent.FINISHED:
