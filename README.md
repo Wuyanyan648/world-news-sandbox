@@ -80,10 +80,12 @@ python3 workflow/news_updater.py --date 2026-11-15
 
 ```
 .
-├── world-news-map.html      # 地图主页面（自包含，内嵌 50m 世界地图数据）
+├── world-news-map.html      # 地图主页面（界面与渲染，启动时渐进加载）
+├── world-geo.js             # Natural Earth 50m 世界边界数据（显示地图后异步加载）
+├── assets/map-base.jpg      # 预烘焙底图（缺失时自动回退到运行时烘焙）
 ├── news-data.js             # 新闻数据（每日任务重写此文件）
 ├── desktop/
-│   ├── news_sandbox.py      # Linux 桌面壳（GTK + WebKitGTK）
+│   ├── news_sandbox.py      # Linux 桌面壳（GTK4 + WebKitGTK 6.0）
 │   ├── icon.svg             # 应用图标
 │   └── 国际新闻沙盘.desktop  # 桌面启动器
 ├── 启动国际新闻沙盘.sh       # 一键启动脚本
@@ -97,7 +99,8 @@ python3 workflow/news_updater.py --date 2026-11-15
 
 - 前端：原生 HTML/Canvas（无框架、无构建），自包含离线可用。
 - 桌面壳：Python + PyGObject + GTK4 + WebKitGTK 6.0（DMABUF/GPU 合成）。
-- 地图数据：Natural Earth 50m（world-atlas TopoJSON 解码为 GeoJSON 内嵌）。
+- 地图数据：Natural Earth 50m（world-atlas TopoJSON 解码为 GeoJSON，`world-geo.js` 异步加载，不再阻塞启动）。
+- 启动流程：窗口先显示原生启动画面 → 直接加载预烘焙底图 → 地图出现后再后台建立国家边界索引。
 - 新闻来源：新华社/人民网/央视、TASS、ISW、联合国、Reuters 等公开报道，重要事件多信源交叉核实，单一来源消息标注"未获独立证实"。
 
 ## 说明

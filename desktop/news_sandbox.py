@@ -124,12 +124,23 @@ class NewsSandbox(Gtk.Application):
         self.manager = DataManager()
         self.view = None
         self.win = None
+        self.splash = None
         self.connect('activate', self.on_activate)
+
+    def hide_splash(self):
+        if self.splash is not None:
+            self.splash.set_visible(False)
+            self.splash = None
+        return False
 
     def on_manager_message(self, ucm, value):
         try:
             req = json.loads(value.to_string())
             action = req.get('action')
+            if action == 'ready':
+                # 页面底图已经显示，撤掉原生启动画面
+                GLib.idle_add(self.hide_splash)
+                return
             if action == 'list':
                 out = self.manager.list_weeks()
             elif action == 'deleteWeek':
@@ -164,10 +175,49 @@ class NewsSandbox(Gtk.Application):
         ucm = self.view.get_user_content_manager()
         ucm.register_script_message_handler('newsManager')
         ucm.connect('script-message-received', self.on_manager_message)
-        win.set_child(self.view)
+
+        # 原生启动画面：窗口一出现就能看到内容，WebView 在下面慢慢加载
+        css = Gtk.CssProvider()
+        css.load_from_data(b"""
+        .app-splash { background-color: #070b08;
+          background-image: radial-gradient(circle at 50% 45%, #151b11 0%, #050705 76%); }
+        .splash-title { font-family: Georgia, "Songti SC", serif; font-size: 34px;
+          letter-spacing: 14px; color: #e3c47a; }
+        .splash-sub { font-family: Georgia, "Songti SC", serif; font-size: 12px;
+          letter-spacing: 5px; color: #9a947e; }
+        """)
+        Gtk.StyleContext.add_provider_for_display(
+            win.get_display(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+        splash = Gtk.CenterBox()
+        splash.add_css_class('app-splash')
+        splash.set_hexpand(True)
+        splash.set_vexpand(True)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
+        box.set_halign(Gtk.Align.CENTER)
+        box.set_valign(Gtk.Align.CENTER)
+        title = Gtk.Label(label='寰宇战情')
+        title.add_css_class('splash-title')
+        spinner = Gtk.Spinner()
+        spinner.set_size_request(28, 28)
+        spinner.start()
+        sub = Gtk.Label(label='正在铺开地图…')
+        sub.add_css_class('splash-sub')
+        box.append(title)
+        box.append(spinner)
+        box.append(sub)
+        splash.set_center_widget(box)
+        self.splash = splash
+
+        overlay = Gtk.Overlay()
+        overlay.set_child(self.view)
+        overlay.add_overlay(splash)
+        win.set_child(overlay)
         self.view.load_uri('file://' + HTML)
 
         win.present()
+        # 兜底：页面 ready 消息丢失时也要撤掉启动画面
+        GLib.timeout_add_seconds(7, self.hide_splash)
         if '--open-manager' in sys.argv:
             def on_load_changed(v, ev):
                 if ev == WebKit.LoadEvent.FINISHED:
