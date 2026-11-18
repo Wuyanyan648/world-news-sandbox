@@ -101,6 +101,7 @@ python3 workflow/news_updater.py --date 2026-11-15
 - 桌面壳：Python + PyGObject + GTK4 + WebKitGTK 6.0（DMABUF/GPU 合成）。
 - 地图数据：Natural Earth 50m（world-atlas TopoJSON 解码为 GeoJSON，`world-geo.js` 异步加载，不再阻塞启动）。
 - 启动流程：窗口先显示原生启动画面 → 直接加载预烘焙底图 → 地图出现后再后台建立国家边界索引。
+- 沙盒说明：Ubuntu 24.04 的 AppArmor 会限制 GNOME 应用栏启动的进程创建 unprivileged userns，WebKit 自带的 bwrap 沙盒会因此失败（`bwrap: setting up uid map: Permission denied`）并卡住页面加载。桌面壳因此关闭了 WebKit 沙盒（`WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1`）；应用只加载本地页面与本地数据。
 - 新闻来源：新华社/人民网/央视、TASS、ISW、联合国、Reuters 等公开报道，重要事件多信源交叉核实，单一来源消息标注"未获独立证实"。
 
 ## 说明

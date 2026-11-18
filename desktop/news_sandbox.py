@@ -8,6 +8,11 @@ os.environ.setdefault('GDK_BACKEND', 'x11')
 # WebKit 会静默退回纯软件渲染；GTK4 / WebKit 6.0 的 DMABUF 路径可用，
 # 强制开启后由 GPU 完成合成（实测拖拽/缩放稳定 60fps）。
 os.environ.setdefault('WEBKIT_FORCE_DMABUF_RENDERER', '1')
+# Ubuntu 24.04 的 AppArmor 限制 unprivileged userns：从 GNOME 应用栏启动时，
+# WebKit 的 bwrap 沙箱无法建立 uid map（journal: "bwrap: setting up uid map:
+# Permission denied"），导致 load_uri 卡死、窗口一直不出现。这里禁用 WebKit
+# 沙箱；应用只加载本地页面与本地数据，不接受远程网页。
+os.environ.setdefault('WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS', '1')
 
 import json
 import re
@@ -276,14 +281,18 @@ class NewsSandbox(Gtk.Application):
             self.view.connect('web-process-terminated', self.on_web_crash)
         except Exception:
             pass
-        self.view.load_uri('file://' + HTML)
 
-        win.present()
-        log('window presented')
-        # 先映射再最大化：GTK4 + Mutter 下，映射前 maximize 偶尔会让窗口
-        # 停在“需要 allocation”的状态，表现为光标转圈但没有窗口。
+        # 先把窗口映射出来，再开始加载页面：即使 WebKit 初始化慢，
+        # 用户也能立刻看到启动画面，而不是对着转圈的光标。
+        win.set_visible(True)
+        log(f'window shown (mapped={win.get_mapped()})')
         GLib.timeout_add(80, self.maximize_once)
         GLib.timeout_add(2000, self.check_mapped)
+
+        log('calling load_uri')
+        self.view.load_uri('file://' + HTML)
+        log('load_uri returned')
+
         # 兜底：7 秒还没 ready 就不要静默黑屏，直接在启动画面上报错
         GLib.timeout_add_seconds(7, self.splash_timeout)
         if '--open-manager' in sys.argv:
